@@ -6,10 +6,11 @@ from pyatari.clock import MasterClock
 from pyatari.display import DisplaySurface
 from pyatari.gtia import GTIA
 from pyatari.machine import Machine, MachineStatus
+from pyatari.peripherals import CassetteDeck, PrinterDevice
 from pyatari.pia import PIA
 from pyatari.pokey import POKEY
 from pyatari.sio import ATRImage, DiskDrive, SIOBus, XEXImage
 
 __version__ = "0.1.0"
 
-__all__ = ["ANTIC", "ATRImage", "AudioOutput", "DiskDrive", "DisplaySurface", "GTIA", "Machine", "MachineStatus", "MasterClock", "PIA", "POKEY", "SIOBus", "XEXImage", "__version__"]
+__all__ = ["ANTIC", "ATRImage", "AudioOutput", "CassetteDeck", "DiskDrive", "DisplaySurface", "GTIA", "Machine", "MachineStatus", "MasterClock", "PIA", "POKEY", "PrinterDevice", "SIOBus", "XEXImage", "__version__"]

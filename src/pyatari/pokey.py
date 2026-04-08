@@ -175,6 +175,16 @@ class POKEY:
     def channel_volume(self, channel: int) -> float:
         return (self.audc[channel] & 0x0F) / 15.0
 
+    def set_paddle(self, paddle: int, value: int) -> None:
+        if not 0 <= paddle < len(self.pot_values):
+            msg = "paddle index out of range"
+            raise ValueError(msg)
+        if not 0 <= value <= 228:
+            msg = "paddle value must be in range 0..228"
+            raise ValueError(msg)
+        self.pot_values[paddle] = value
+        self.allpot = 0xFF
+
     def generate_samples(self, sample_count: int, sample_rate: int = DEFAULT_AUDIO_SAMPLE_RATE) -> list[float]:
         if sample_count < 0:
             msg = "sample_count must be non-negative"

@@ -13,6 +13,7 @@ from pyatari.cpu import CPU, Opcode
 from pyatari.display import DisplaySurface
 from pyatari.gtia import GTIA
 from pyatari.memory import MemoryBus
+from pyatari.peripherals import CassetteDeck, PrinterDevice
 from pyatari.pia import PIA
 from pyatari.pokey import DEFAULT_AUDIO_SAMPLE_RATE, POKEY
 from pyatari.sio import DiskDrive, SIOBus, XEXImage
@@ -84,6 +85,8 @@ class Machine:
     sio: SIOBus = field(default_factory=SIOBus)
     display: DisplaySurface = field(default_factory=DisplaySurface)
     audio: AudioOutput = field(default_factory=AudioOutput)
+    cassette: CassetteDeck = field(default_factory=CassetteDeck)
+    printer: PrinterDevice = field(default_factory=PrinterDevice)
     turbo: bool = False
 
     def __post_init__(self) -> None:
@@ -217,7 +220,15 @@ class Machine:
     def release_break(self) -> None:
         self.pokey.irqst |= int(IRQBits.BREAK_KEY)
 
-    def set_joystick(self, *, up: bool = False, down: bool = False, left: bool = False, right: bool = False) -> None:
+    def set_joystick(
+        self,
+        *,
+        up: bool = False,
+        down: bool = False,
+        left: bool = False,
+        right: bool = False,
+        port: int = 0,
+    ) -> None:
         state = 0x0F
         if up:
             state &= ~int(JoystickBits.STICK0_UP)
@@ -227,10 +238,28 @@ class Machine:
             state &= ~int(JoystickBits.STICK0_LEFT)
         if right:
             state &= ~int(JoystickBits.STICK0_RIGHT)
-        self.pia.set_joystick_state(stick0=state)
+        if port == 0:
+            self.pia.set_joystick_state(stick0=state)
+        elif port == 1:
+            self.pia.set_joystick_state(stick1=state)
+        else:
+            msg = "joystick port must be 0 or 1"
+            raise ValueError(msg)
 
-    def set_trigger(self, pressed: bool) -> None:
-        self.gtia.set_trigger(0, pressed)
+    def set_trigger(self, pressed: bool, *, port: int = 0) -> None:
+        self.gtia.set_trigger(port, pressed)
+
+    def set_paddle(self, paddle: int, value: int) -> None:
+        self.pokey.set_paddle(paddle, value)
+
+    def load_cassette(self, data: bytes) -> None:
+        self.cassette.load_tape(data)
+
+    def read_cassette_block(self, size: int) -> bytes:
+        return self.cassette.read_block(size)
+
+    def printer_write(self, text: str) -> None:
+        self.printer.write(text)
 
     def _render_visible_scanlines(self) -> None:
         row = self.antic.scanline - 1
