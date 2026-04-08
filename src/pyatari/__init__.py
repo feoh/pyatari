@@ -2,7 +2,8 @@
 
 from pyatari.clock import MasterClock
 from pyatari.machine import Machine
+from pyatari.pia import PIA
 
 __version__ = "0.1.0"
 
-__all__ = ["Machine", "MasterClock", "__version__"]
+__all__ = ["Machine", "MasterClock", "PIA", "__version__"]

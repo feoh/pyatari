@@ -8,6 +8,7 @@ from pyatari.clock import MasterClock
 from pyatari.constants import CYCLES_PER_FRAME
 from pyatari.cpu import CPU, Opcode
 from pyatari.memory import MemoryBus
+from pyatari.pia import PIA
 
 
 @dataclass(slots=True)
@@ -17,9 +18,12 @@ class Machine:
     memory: MemoryBus = field(default_factory=MemoryBus)
     cpu: CPU = field(init=False)
     clock: MasterClock = field(default_factory=MasterClock)
+    pia: PIA = field(init=False)
 
     def __post_init__(self) -> None:
         self.cpu = CPU(memory=self.memory)
+        self.pia = PIA(memory=self.memory)
+        self.pia.install()
 
     def reset(self) -> None:
         self.clock.reset()
