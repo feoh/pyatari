@@ -5,7 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from pyatari.antic import DisplayListLine
-from pyatari.constants import ANTIC_MODES, CHACTLBits, GTIAReadRegister, GTIAWriteRegister
+from pyatari.constants import (
+    ANTIC_MODES,
+    CHACTLBits,
+    GTIAReadRegister,
+    GTIAWriteRegister,
+    PM_SIZE_DOUBLE,
+    PM_SIZE_QUAD,
+)
 from pyatari.memory import MemoryBus
 
 GTIA_MIRROR_BASE = 0xD000
@@ -24,6 +31,12 @@ class GTIA:
     framebuffer: list[list[int]] = field(
         default_factory=lambda: [[0 for _ in range(DISPLAY_WIDTH)] for _ in range(DISPLAY_HEIGHT)]
     )
+    player_dma: list[list[int]] = field(
+        default_factory=lambda: [[0 for _ in range(DISPLAY_WIDTH)] for _ in range(4)]
+    )
+    missile_dma: list[list[int]] = field(
+        default_factory=lambda: [[0 for _ in range(DISPLAY_WIDTH)] for _ in range(4)]
+    )
 
     def __post_init__(self) -> None:
         for register in GTIAWriteRegister:
@@ -41,6 +54,7 @@ class GTIA:
         for register in self.read_registers:
             self.read_registers[register] = 0
         self.clear_framebuffer()
+        self._clear_pm_buffers()
 
     def read_register(self, address: int) -> int:
         register = self._normalize(address)
@@ -106,9 +120,10 @@ class GTIA:
                 columns=mode_info.bytes_per_line,
                 cell_width=8 if line.mode in {2, 3, 4, 5} else 16,
             )
-            return
+        else:
+            self._render_bitmap_mode(line, row=row)
 
-        self._render_bitmap_mode(line, row=row)
+        self._overlay_player_missile_graphics(row)
 
     def _render_text_mode(
         self,
@@ -196,6 +211,64 @@ class GTIA:
         while x < DISPLAY_WIDTH:
             out_row[x] = colors[0]
             x += 1
+
+    def render_player(self, player: int, *, xpos: int, graphics: int, size: int, color: int) -> None:
+        self.player_dma[player] = [0 for _ in range(DISPLAY_WIDTH)]
+        width = self._pm_size_multiplier(size)
+        color_rgb = self.color_to_rgb(color)
+        for bit in range(8):
+            if not (graphics & (0x80 >> bit)):
+                continue
+            start = xpos + (bit * width)
+            for offset in range(width):
+                x = start + offset
+                if 0 <= x < DISPLAY_WIDTH:
+                    self.player_dma[player][x] = color_rgb
+
+    def render_missiles(self, *, xpos: list[int], graphics: int, size_mask: int, color: int) -> None:
+        for missile in range(4):
+            self.missile_dma[missile] = [0 for _ in range(DISPLAY_WIDTH)]
+            if not (graphics & (1 << missile)):
+                continue
+            width_code = (size_mask >> (missile * 2)) & 0x03
+            width = self._pm_size_multiplier(width_code) * 2
+            color_rgb = self.color_to_rgb(color)
+            for offset in range(width):
+                x = xpos[missile] + offset
+                if 0 <= x < DISPLAY_WIDTH:
+                    self.missile_dma[missile][x] = color_rgb
+
+    def _overlay_player_missile_graphics(self, row: int) -> None:
+        out_row = self.framebuffer[row]
+        for missile in range(4):
+            missile_row = self.missile_dma[missile]
+            for x, pixel in enumerate(missile_row):
+                if pixel:
+                    if out_row[x] != self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLBK)]):
+                        self.read_registers[int(GTIAReadRegister.M0PF) + missile] = 0x0F
+                    out_row[x] = pixel
+        for player in range(4):
+            player_row = self.player_dma[player]
+            for x, pixel in enumerate(player_row):
+                if pixel:
+                    if out_row[x] != self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLBK)]):
+                        self.read_registers[int(GTIAReadRegister.P0PF) + player] = 0x0F
+                    for other in range(4):
+                        if other != player and self.player_dma[other][x]:
+                            self.read_registers[int(GTIAReadRegister.P0PL) + player] |= 1 << other
+                    out_row[x] = pixel
+
+    def _clear_pm_buffers(self) -> None:
+        for player in range(4):
+            self.player_dma[player] = [0 for _ in range(DISPLAY_WIDTH)]
+            self.missile_dma[player] = [0 for _ in range(DISPLAY_WIDTH)]
+
+    def _pm_size_multiplier(self, size: int) -> int:
+        if size == PM_SIZE_DOUBLE:
+            return 2
+        if size == PM_SIZE_QUAD:
+            return 4
+        return 1
 
     def _fill_row(self, row: int, color_value: int) -> None:
         color = self.color_to_rgb(color_value)

@@ -126,6 +126,28 @@ def test_render_scanline_bitmap_mode_8_uses_playfield_colors():
 
 
 
+def test_player_rendering_respects_position_and_size():
+    gtia = GTIA(memory=MemoryBus())
+    gtia.render_player(0, xpos=10, graphics=0b10000000, size=1, color=0x2E)
+
+    assert gtia.player_dma[0][10] == gtia.color_to_rgb(0x2E)
+    assert gtia.player_dma[0][11] == gtia.color_to_rgb(0x2E)
+    assert gtia.player_dma[0][12] == 0
+
+
+
+def test_missile_rendering_and_collision_registers():
+    gtia = GTIA(memory=MemoryBus())
+    gtia.write_register(int(GTIAWriteRegister.COLBK), 0x00)
+    gtia._fill_row(0, 0x12)
+    gtia.render_missiles(xpos=[4, 0, 0, 0], graphics=0b0001, size_mask=0, color=0x3A)
+    gtia._overlay_player_missile_graphics(0)
+
+    assert gtia.framebuffer[0][4] == gtia.color_to_rgb(0x3A)
+    assert gtia.read_register(int(GTIAReadRegister.M0PF)) == 0x0F
+
+
+
 def test_machine_installs_gtia_handlers_and_renders_visible_line():
     machine = Machine()
     machine.memory.write_word(RESET_VECTOR, 0x2000)
@@ -139,6 +161,10 @@ def test_machine_installs_gtia_handlers_and_renders_visible_line():
     machine.memory.write_byte(int(GTIAWriteRegister.COLPF1), 0x0E)
     machine.memory.write_byte(int(GTIAWriteRegister.COLBK), 0x00)
     machine.memory.write_byte(0xD409, 0x14)
+    machine.memory.write_byte(0xD000, 8)
+    machine.memory.write_byte(0xD00D, 0b10000000)
+    machine.memory.write_byte(0xD008, 0)
+    machine.memory.write_byte(0xD012, 0x3A)
     machine.cpu.pc = 0x2000
 
     for _ in range(57):
@@ -146,3 +172,4 @@ def test_machine_installs_gtia_handlers_and_renders_visible_line():
 
     assert machine.memory.read_byte(int(GTIAWriteRegister.COLPF1)) == 0x0E
     assert machine.gtia.framebuffer[0][0] == machine.gtia.color_to_rgb(0x0E)
+    assert machine.gtia.framebuffer[0][8] == machine.gtia.color_to_rgb(0x3A)
