@@ -43,6 +43,7 @@ class GTIA:
             self.write_registers[int(register)] = 0
         for register in GTIAReadRegister:
             self.read_registers[int(register)] = 0
+        self._reset_input_registers()
 
     def install(self) -> None:
         self.memory.register_read_handler(0xD000, 0xD01F, self.read_register)
@@ -53,6 +54,7 @@ class GTIA:
             self.write_registers[register] = 0
         for register in self.read_registers:
             self.read_registers[register] = 0
+        self._reset_input_registers()
         self.clear_framebuffer()
         self._clear_pm_buffers()
 
@@ -99,6 +101,8 @@ class GTIA:
         row: int,
         antic_chbase: int = 0,
         antic_chactl: int = 0,
+        antic_hscrol: int = 0,
+        antic_vscrol: int = 0,
     ) -> None:
         if not (0 <= row < DISPLAY_HEIGHT):
             return
@@ -119,9 +123,13 @@ class GTIA:
                 antic_chactl=antic_chactl,
                 columns=mode_info.bytes_per_line,
                 cell_width=8 if line.mode in {2, 3, 4, 5} else 16,
+                vertical_offset=self._vertical_scroll_offset(line, antic_vscrol),
             )
         else:
-            self._render_bitmap_mode(line, row=row)
+            self._render_bitmap_mode(line, row=row, vertical_offset=self._vertical_scroll_offset(line, antic_vscrol))
+
+        if line.hscroll:
+            self._apply_horizontal_scroll(row, self._horizontal_scroll_offset(line, antic_hscrol))
 
         self._overlay_player_missile_graphics(row)
 
@@ -134,9 +142,10 @@ class GTIA:
         antic_chactl: int,
         columns: int,
         cell_width: int,
+        vertical_offset: int = 0,
     ) -> None:
         chars = [self.memory.read_byte(line.screen_address + column) for column in range(columns)]
-        glyph_row = row % ANTIC_MODES[line.mode].scanlines_per_row
+        glyph_row = (row + vertical_offset) % ANTIC_MODES[line.mode].scanlines_per_row
         fg_color = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLPF1)])
         bg_color = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLBK)])
         alt_fg = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLPF2)])
@@ -172,9 +181,11 @@ class GTIA:
         for x in range(fill_from, DISPLAY_WIDTH):
             out_row[x] = bg_color
 
-    def _render_bitmap_mode(self, line: DisplayListLine, *, row: int) -> None:
+    def _render_bitmap_mode(self, line: DisplayListLine, *, row: int, vertical_offset: int = 0) -> None:
         mode_info = ANTIC_MODES[line.mode]
-        data = [self.memory.read_byte(line.screen_address + index) for index in range(mode_info.bytes_per_line)]
+        row_block = vertical_offset // max(1, mode_info.scanlines_per_row)
+        base_address = (line.screen_address + (row_block * mode_info.bytes_per_line)) & 0xFFFF
+        data = [self.memory.read_byte(base_address + index) for index in range(mode_info.bytes_per_line)]
         out_row = self.framebuffer[row]
         colors = [
             self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLBK)]),
@@ -258,6 +269,20 @@ class GTIA:
                             self.read_registers[int(GTIAReadRegister.P0PL) + player] |= 1 << other
                     out_row[x] = pixel
 
+    def set_trigger(self, trigger: int, pressed: bool) -> None:
+        register = int(GTIAReadRegister.TRIG0) + trigger
+        self.read_registers[register] = 0x00 if pressed else 0x01
+
+    def set_console_switch(self, *, start: bool | None = None, select: bool | None = None, option: bool | None = None) -> None:
+        consol = self.read_registers[int(GTIAReadRegister.CONSOL)] & 0x07
+        if start is not None:
+            consol = (consol & ~0x01) | (0x00 if start else 0x01)
+        if select is not None:
+            consol = (consol & ~0x02) | (0x00 if select else 0x02)
+        if option is not None:
+            consol = (consol & ~0x04) | (0x00 if option else 0x04)
+        self.read_registers[int(GTIAReadRegister.CONSOL)] = consol
+
     def _clear_pm_buffers(self) -> None:
         for player in range(4):
             self.player_dma[player] = [0 for _ in range(DISPLAY_WIDTH)]
@@ -269,6 +294,28 @@ class GTIA:
         if size == PM_SIZE_QUAD:
             return 4
         return 1
+
+    def _horizontal_scroll_offset(self, line: DisplayListLine, antic_hscrol: int) -> int:
+        return antic_hscrol & 0x0F if line.hscroll else 0
+
+    def _vertical_scroll_offset(self, line: DisplayListLine, antic_vscrol: int) -> int:
+        return antic_vscrol & 0x0F if line.vscroll else 0
+
+    def _apply_horizontal_scroll(self, row: int, offset: int) -> None:
+        if offset <= 0:
+            return
+        bg = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLBK)])
+        out_row = self.framebuffer[row]
+        shifted = [bg] * DISPLAY_WIDTH
+        for x in range(offset, DISPLAY_WIDTH):
+            shifted[x] = out_row[x - offset]
+        self.framebuffer[row] = shifted
+
+    def _reset_input_registers(self) -> None:
+        for register in range(int(GTIAReadRegister.TRIG0), int(GTIAReadRegister.TRIG3) + 1):
+            self.read_registers[register] = 0x01
+        self.read_registers[int(GTIAReadRegister.CONSOL)] = 0x07
+        self.read_registers[int(GTIAReadRegister.PAL)] = 0x0F
 
     def _fill_row(self, row: int, color_value: int) -> None:
         color = self.color_to_rgb(color_value)

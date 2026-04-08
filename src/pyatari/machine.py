@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from pyatari.constants import IRQBits, JoystickBits
+
 from pyatari.antic import ANTIC
 from pyatari.clock import MasterClock
 from pyatari.constants import CYCLES_PER_FRAME, CYCLES_PER_SCANLINE
@@ -14,6 +16,48 @@ from pyatari.memory import MemoryBus
 from pyatari.pia import PIA
 from pyatari.pokey import POKEY
 from pyatari.sio import DiskDrive, SIOBus, XEXImage
+
+
+KEYCODE_MAP = {
+    "a": 0x3F,
+    "b": 0x15,
+    "c": 0x12,
+    "d": 0x3A,
+    "e": 0x2A,
+    "f": 0x38,
+    "g": 0x3D,
+    "h": 0x39,
+    "i": 0x0D,
+    "j": 0x01,
+    "k": 0x05,
+    "l": 0x00,
+    "m": 0x25,
+    "n": 0x23,
+    "o": 0x08,
+    "p": 0x0A,
+    "q": 0x2F,
+    "r": 0x28,
+    "s": 0x3E,
+    "t": 0x2D,
+    "u": 0x0B,
+    "v": 0x10,
+    "w": 0x2E,
+    "x": 0x16,
+    "y": 0x2B,
+    "z": 0x17,
+    "0": 0x32,
+    "1": 0x1F,
+    "2": 0x1E,
+    "3": 0x1A,
+    "4": 0x18,
+    "5": 0x1D,
+    "6": 0x1B,
+    "7": 0x33,
+    "8": 0x35,
+    "9": 0x30,
+    "space": 0x21,
+    "return": 0x0C,
+}
 
 
 @dataclass(slots=True)
@@ -108,6 +152,43 @@ class Machine:
     def attach_disk(self, device_id: int, drive: DiskDrive) -> None:
         self.sio.attach_disk(device_id, drive)
 
+    def press_key(self, key: str) -> None:
+        self.pokey.press_key(KEYCODE_MAP[key.lower()])
+
+    def release_key(self) -> None:
+        self.pokey.release_key()
+
+    def set_console_switches(
+        self, *, start: bool | None = None, select: bool | None = None, option: bool | None = None
+    ) -> None:
+        self.gtia.set_console_switch(start=start, select=select, option=option)
+
+    def press_reset(self) -> None:
+        self.cpu.nmi()
+
+    def press_break(self) -> None:
+        self.pokey.irqst &= ~int(IRQBits.BREAK_KEY) & 0xFF
+        if self.pokey.irqen & int(IRQBits.BREAK_KEY):
+            self.cpu.irq()
+
+    def release_break(self) -> None:
+        self.pokey.irqst |= int(IRQBits.BREAK_KEY)
+
+    def set_joystick(self, *, up: bool = False, down: bool = False, left: bool = False, right: bool = False) -> None:
+        state = 0x0F
+        if up:
+            state &= ~int(JoystickBits.STICK0_UP)
+        if down:
+            state &= ~int(JoystickBits.STICK0_DOWN)
+        if left:
+            state &= ~int(JoystickBits.STICK0_LEFT)
+        if right:
+            state &= ~int(JoystickBits.STICK0_RIGHT)
+        self.pia.set_joystick_state(stick0=state)
+
+    def set_trigger(self, pressed: bool) -> None:
+        self.gtia.set_trigger(0, pressed)
+
     def _render_visible_scanlines(self) -> None:
         row = self.antic.scanline - 1
         if self.antic.current_line is not None and 0 <= row < self.display.height:
@@ -155,4 +236,6 @@ class Machine:
                 row=row,
                 antic_chbase=self.antic.chbase,
                 antic_chactl=self.antic.chactl,
+                antic_hscrol=self.antic.hscrol,
+                antic_vscrol=self.antic.vscrol,
             )
