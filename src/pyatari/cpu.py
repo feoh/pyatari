@@ -123,12 +123,19 @@ class CPU:
         elif mnemonic == "LDY":
             self.y = self._read_operand(opcode.mode, operand)
             self._update_nz(self.y)
+        elif mnemonic == "LAX":
+            value = self._read_operand(opcode.mode, operand)
+            self.a = value
+            self.x = value
+            self._update_nz(value)
         elif mnemonic == "STA":
             self._write_operand(opcode.mode, operand, self.a)
         elif mnemonic == "STX":
             self._write_operand(opcode.mode, operand, self.x)
         elif mnemonic == "STY":
             self._write_operand(opcode.mode, operand, self.y)
+        elif mnemonic == "SAX":
+            self._write_operand(opcode.mode, operand, self.a & self.x)
         elif mnemonic == "TAX":
             self.x = self.a
             self._update_nz(self.x)
@@ -195,8 +202,18 @@ class CPU:
             value = (self._read_operand(opcode.mode, operand) - 1) & 0xFF
             self._write_operand(opcode.mode, operand, value)
             self._update_nz(value)
+        elif mnemonic == "DCP":
+            value = (self._read_operand(opcode.mode, operand) - 1) & 0xFF
+            self._write_operand(opcode.mode, operand, value)
+            self._compare(self.a, value)
+        elif mnemonic == "ISB":
+            value = (self._read_operand(opcode.mode, operand) + 1) & 0xFF
+            self._write_operand(opcode.mode, operand, value)
+            self._sbc(value)
         elif mnemonic in {"ASL", "LSR", "ROL", "ROR"}:
             self._shift_rotate(mnemonic, opcode.mode, operand)
+        elif mnemonic in {"SLO", "RLA", "SRE", "RRA"}:
+            self._composite_shift_logic(mnemonic, opcode.mode, operand)
         elif mnemonic == "BIT":
             value = self._read_operand(opcode.mode, operand)
             self.status.zero = (self.a & value) == 0
@@ -305,6 +322,40 @@ class CPU:
 
         self._write_operand(mode, operand, result)
         self._update_nz(result)
+
+    def _composite_shift_logic(self, mnemonic: str, mode: AddressMode, operand: AddressResult) -> None:
+        value = self._read_operand(mode, operand)
+        carry_in = 1 if self.status.carry else 0
+
+        if mnemonic == "SLO":
+            self.status.carry = bool(value & 0x80)
+            result = (value << 1) & 0xFF
+            self._write_operand(mode, operand, result)
+            self.a = (self.a | result) & 0xFF
+            self._update_nz(self.a)
+            return
+
+        if mnemonic == "RLA":
+            self.status.carry = bool(value & 0x80)
+            result = ((value << 1) | carry_in) & 0xFF
+            self._write_operand(mode, operand, result)
+            self.a &= result
+            self._update_nz(self.a)
+            return
+
+        if mnemonic == "SRE":
+            self.status.carry = bool(value & 0x01)
+            result = (value >> 1) & 0xFF
+            self._write_operand(mode, operand, result)
+            self.a ^= result
+            self.a &= 0xFF
+            self._update_nz(self.a)
+            return
+
+        self.status.carry = bool(value & 0x01)
+        result = ((value >> 1) | (carry_in << 7)) & 0xFF
+        self._write_operand(mode, operand, result)
+        self._adc(result)
 
     def _adc(self, value: int) -> None:
         carry_in = 1 if self.status.carry else 0

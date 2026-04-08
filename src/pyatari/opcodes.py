@@ -279,5 +279,70 @@ for code, mnemonic, mode, cycles, extra in [
 ]:
     OPCODES[code] = Opcode(code, mnemonic, mode, MODE_BYTES[mode], cycles, extra)
 
-# Sanity: official 6502 has 151 opcodes.
-assert len(OPCODES) == 151, f"Expected 151 official opcodes, found {len(OPCODES)}"
+# Common undocumented opcodes used by real software.
+for code, mnemonic, mode, cycles, extra in [
+    # LAX
+    (0xA7, "LAX", AddressMode.ZERO_PAGE, 3, 0),
+    (0xB7, "LAX", AddressMode.ZERO_PAGE_Y, 4, 0),
+    (0xAF, "LAX", AddressMode.ABSOLUTE, 4, 0),
+    (0xBF, "LAX", AddressMode.ABSOLUTE_Y, 4, 1),
+    (0xA3, "LAX", AddressMode.INDEXED_INDIRECT, 6, 0),
+    (0xB3, "LAX", AddressMode.INDIRECT_INDEXED, 5, 1),
+    # SAX
+    (0x87, "SAX", AddressMode.ZERO_PAGE, 3, 0),
+    (0x97, "SAX", AddressMode.ZERO_PAGE_Y, 4, 0),
+    (0x8F, "SAX", AddressMode.ABSOLUTE, 4, 0),
+    (0x83, "SAX", AddressMode.INDEXED_INDIRECT, 6, 0),
+    # DCP
+    (0xC7, "DCP", AddressMode.ZERO_PAGE, 5, 0),
+    (0xD7, "DCP", AddressMode.ZERO_PAGE_X, 6, 0),
+    (0xCF, "DCP", AddressMode.ABSOLUTE, 6, 0),
+    (0xDF, "DCP", AddressMode.ABSOLUTE_X, 7, 0),
+    (0xDB, "DCP", AddressMode.ABSOLUTE_Y, 7, 0),
+    (0xC3, "DCP", AddressMode.INDEXED_INDIRECT, 8, 0),
+    (0xD3, "DCP", AddressMode.INDIRECT_INDEXED, 8, 0),
+    # ISB/ISC
+    (0xE7, "ISB", AddressMode.ZERO_PAGE, 5, 0),
+    (0xF7, "ISB", AddressMode.ZERO_PAGE_X, 6, 0),
+    (0xEF, "ISB", AddressMode.ABSOLUTE, 6, 0),
+    (0xFF, "ISB", AddressMode.ABSOLUTE_X, 7, 0),
+    (0xFB, "ISB", AddressMode.ABSOLUTE_Y, 7, 0),
+    (0xE3, "ISB", AddressMode.INDEXED_INDIRECT, 8, 0),
+    (0xF3, "ISB", AddressMode.INDIRECT_INDEXED, 8, 0),
+    # SLO
+    (0x07, "SLO", AddressMode.ZERO_PAGE, 5, 0),
+    (0x17, "SLO", AddressMode.ZERO_PAGE_X, 6, 0),
+    (0x0F, "SLO", AddressMode.ABSOLUTE, 6, 0),
+    (0x1F, "SLO", AddressMode.ABSOLUTE_X, 7, 0),
+    (0x1B, "SLO", AddressMode.ABSOLUTE_Y, 7, 0),
+    (0x03, "SLO", AddressMode.INDEXED_INDIRECT, 8, 0),
+    (0x13, "SLO", AddressMode.INDIRECT_INDEXED, 8, 0),
+    # RLA
+    (0x27, "RLA", AddressMode.ZERO_PAGE, 5, 0),
+    (0x37, "RLA", AddressMode.ZERO_PAGE_X, 6, 0),
+    (0x2F, "RLA", AddressMode.ABSOLUTE, 6, 0),
+    (0x3F, "RLA", AddressMode.ABSOLUTE_X, 7, 0),
+    (0x3B, "RLA", AddressMode.ABSOLUTE_Y, 7, 0),
+    (0x23, "RLA", AddressMode.INDEXED_INDIRECT, 8, 0),
+    (0x33, "RLA", AddressMode.INDIRECT_INDEXED, 8, 0),
+    # SRE
+    (0x47, "SRE", AddressMode.ZERO_PAGE, 5, 0),
+    (0x57, "SRE", AddressMode.ZERO_PAGE_X, 6, 0),
+    (0x4F, "SRE", AddressMode.ABSOLUTE, 6, 0),
+    (0x5F, "SRE", AddressMode.ABSOLUTE_X, 7, 0),
+    (0x5B, "SRE", AddressMode.ABSOLUTE_Y, 7, 0),
+    (0x43, "SRE", AddressMode.INDEXED_INDIRECT, 8, 0),
+    (0x53, "SRE", AddressMode.INDIRECT_INDEXED, 8, 0),
+    # RRA
+    (0x67, "RRA", AddressMode.ZERO_PAGE, 5, 0),
+    (0x77, "RRA", AddressMode.ZERO_PAGE_X, 6, 0),
+    (0x6F, "RRA", AddressMode.ABSOLUTE, 6, 0),
+    (0x7F, "RRA", AddressMode.ABSOLUTE_X, 7, 0),
+    (0x7B, "RRA", AddressMode.ABSOLUTE_Y, 7, 0),
+    (0x63, "RRA", AddressMode.INDEXED_INDIRECT, 8, 0),
+    (0x73, "RRA", AddressMode.INDIRECT_INDEXED, 8, 0),
+]:
+    OPCODES[code] = Opcode(code, mnemonic, mode, MODE_BYTES[mode], cycles, extra)
+
+# Sanity: official 6502 has 151 opcodes, plus 52 common undocumented opcodes here.
+assert len(OPCODES) == 203, f"Expected 203 opcodes, found {len(OPCODES)}"

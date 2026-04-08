@@ -4,8 +4,8 @@ from pyatari.opcodes import AddressMode, OPCODES
 
 
 class TestOpcodeTable:
-    def test_official_opcode_table_has_151_entries(self):
-        assert len(OPCODES) == 151
+    def test_opcode_table_includes_official_and_common_undocumented_entries(self):
+        assert len(OPCODES) == 203
 
     def test_all_opcodes_have_consistent_metadata(self):
         for code, opcode in OPCODES.items():
@@ -20,3 +20,5 @@ class TestOpcodeTable:
         assert OPCODES[0x6C].mode == AddressMode.INDIRECT
         assert OPCODES[0x00].mnemonic == "BRK"
         assert OPCODES[0xEA].mnemonic == "NOP"
+        assert OPCODES[0xA7].mnemonic == "LAX"
+        assert OPCODES[0x67].mnemonic == "RRA"
