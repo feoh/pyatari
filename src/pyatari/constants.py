@@ -25,6 +25,7 @@ The Atari 800XL memory map (64KB address space):
     $E000-$FFFF  OS ROM (8KB, includes character set and OS code)
 """
 
+from dataclasses import dataclass
 from enum import IntEnum
 
 
@@ -394,8 +395,6 @@ DL_VSCROL_BIT = 0x20     # Bit 5: Vertical scroll enable
 # of bytes per line, the height in scanlines per mode line, and the number
 # of colors available.
 # =============================================================================
-
-from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
