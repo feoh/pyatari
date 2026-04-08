@@ -8,6 +8,8 @@ from pyatari.antic import ANTIC
 from pyatari.clock import MasterClock
 from pyatari.constants import CYCLES_PER_FRAME, CYCLES_PER_SCANLINE
 from pyatari.cpu import CPU, Opcode
+from pyatari.display import DisplaySurface
+from pyatari.gtia import GTIA
 from pyatari.memory import MemoryBus
 from pyatari.pia import PIA
 
@@ -21,6 +23,8 @@ class Machine:
     clock: MasterClock = field(default_factory=MasterClock)
     pia: PIA = field(init=False)
     antic: ANTIC = field(init=False)
+    gtia: GTIA = field(init=False)
+    display: DisplaySurface = field(default_factory=DisplaySurface)
 
     def __post_init__(self) -> None:
         self.cpu = CPU(memory=self.memory)
@@ -28,10 +32,13 @@ class Machine:
         self.pia.install()
         self.antic = ANTIC(memory=self.memory)
         self.antic.install()
+        self.gtia = GTIA(memory=self.memory)
+        self.gtia.install()
 
     def reset(self) -> None:
         self.clock.reset()
         self.antic.reset()
+        self.gtia.reset()
         self.cpu.reset()
 
     def step(self) -> Opcode:
@@ -50,6 +57,7 @@ class Machine:
         events = self.antic.tick(elapsed)
         if "dli" in events or "vbi" in events:
             self.cpu.nmi()
+        self._render_visible_scanlines()
         return opcode
 
     def run_steps(self, steps: int) -> list[Opcode]:
@@ -78,3 +86,8 @@ class Machine:
             self.step()
             steps += 1
         return steps
+
+    def _render_visible_scanlines(self) -> None:
+        row = self.antic.scanline - 1
+        if self.antic.current_line is not None and 0 <= row < self.display.height:
+            self.gtia.render_scanline(self.antic.current_line, row=row, antic_chbase=self.antic.chbase)

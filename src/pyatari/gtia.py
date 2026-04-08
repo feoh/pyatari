@@ -1,0 +1,117 @@
+"""GTIA color and playfield rendering for PyAtari."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from pyatari.antic import DisplayListLine
+from pyatari.constants import ANTIC_MODES, GTIAReadRegister, GTIAWriteRegister
+from pyatari.memory import MemoryBus
+
+GTIA_MIRROR_BASE = 0xD000
+GTIA_MIRROR_MASK = 0x1F
+DISPLAY_WIDTH = 384
+DISPLAY_HEIGHT = 240
+
+
+@dataclass(slots=True)
+class GTIA:
+    """Minimal GTIA model focused on color registers and text-mode scanlines."""
+
+    memory: MemoryBus
+    write_registers: dict[int, int] = field(default_factory=dict)
+    read_registers: dict[int, int] = field(default_factory=dict)
+    framebuffer: list[list[int]] = field(
+        default_factory=lambda: [[0 for _ in range(DISPLAY_WIDTH)] for _ in range(DISPLAY_HEIGHT)]
+    )
+
+    def __post_init__(self) -> None:
+        for register in GTIAWriteRegister:
+            self.write_registers[int(register)] = 0
+        for register in GTIAReadRegister:
+            self.read_registers[int(register)] = 0
+
+    def install(self) -> None:
+        self.memory.register_read_handler(0xD000, 0xD01F, self.read_register)
+        self.memory.register_write_handler(0xD000, 0xD01F, self.write_register)
+
+    def reset(self) -> None:
+        for register in self.write_registers:
+            self.write_registers[register] = 0
+        for register in self.read_registers:
+            self.read_registers[register] = 0
+        self.clear_framebuffer()
+
+    def read_register(self, address: int) -> int:
+        register = self._normalize(address)
+        if register in self.read_registers:
+            return self.read_registers[register]
+        if register in self.write_registers:
+            return self.write_registers[register]
+        return 0
+
+    def write_register(self, address: int, value: int) -> None:
+        register = self._normalize(address)
+        value &= 0xFF
+        if register == int(GTIAWriteRegister.HITCLR):
+            for key in self.read_registers:
+                self.read_registers[key] = 0
+            return
+        if register in self.write_registers:
+            self.write_registers[register] = value
+
+    def clear_framebuffer(self) -> None:
+        background = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLBK)])
+        for y in range(DISPLAY_HEIGHT):
+            row = self.framebuffer[y]
+            for x in range(DISPLAY_WIDTH):
+                row[x] = background
+
+    def color_to_rgb(self, value: int) -> int:
+        value &= 0xFF
+        hue = (value >> 4) & 0x0F
+        luminance = value & 0x0F
+        brightness = min(255, luminance * 16 + 15)
+        phase = hue / 16.0
+        red = int(brightness * (0.55 + 0.45 * ((phase + 0.00) % 1.0))) & 0xFF
+        green = int(brightness * (0.55 + 0.45 * ((phase + 0.33) % 1.0))) & 0xFF
+        blue = int(brightness * (0.55 + 0.45 * ((phase + 0.66) % 1.0))) & 0xFF
+        return (red << 16) | (green << 8) | blue
+
+    def render_scanline(self, line: DisplayListLine | None, *, row: int, antic_chbase: int = 0) -> None:
+        if not (0 <= row < DISPLAY_HEIGHT):
+            return
+        if line is None or line.mode is None or line.screen_address is None:
+            self._fill_row(row, self.write_registers[int(GTIAWriteRegister.COLBK)])
+            return
+
+        mode_info = ANTIC_MODES.get(line.mode)
+        if mode_info is None or line.mode != 2:
+            self._fill_row(row, self.write_registers[int(GTIAWriteRegister.COLBK)])
+            return
+
+        chars = [
+            self.memory.read_byte(line.screen_address + column)
+            for column in range(mode_info.bytes_per_line)
+        ]
+        fg = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLPF1)])
+        bg = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLBK)])
+        glyph_row = row % mode_info.scanlines_per_row
+        out_row = self.framebuffer[row]
+        for column, char_code in enumerate(chars):
+            glyph_address = ((antic_chbase & 0xFF) << 8) + ((char_code & 0x7F) * 8) + glyph_row
+            pattern = self.memory.read_byte(glyph_address)
+            base_x = column * 8
+            for bit in range(8):
+                out_row[base_x + bit] = fg if pattern & (0x80 >> bit) else bg
+        for x in range(mode_info.bytes_per_line * 8, DISPLAY_WIDTH):
+            out_row[x] = bg
+
+    def _fill_row(self, row: int, color_value: int) -> None:
+        color = self.color_to_rgb(color_value)
+        out_row = self.framebuffer[row]
+        for x in range(DISPLAY_WIDTH):
+            out_row[x] = color
+
+    def _normalize(self, address: int) -> int:
+        return GTIA_MIRROR_BASE + ((address - GTIA_MIRROR_BASE) & GTIA_MIRROR_MASK)
