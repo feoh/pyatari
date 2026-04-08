@@ -8,7 +8,8 @@ from pyatari.gtia import GTIA
 from pyatari.machine import Machine
 from pyatari.pia import PIA
 from pyatari.pokey import POKEY
+from pyatari.sio import ATRImage, DiskDrive, SIOBus, XEXImage
 
 __version__ = "0.1.0"
 
-__all__ = ["ANTIC", "AudioOutput", "DisplaySurface", "GTIA", "Machine", "MasterClock", "PIA", "POKEY", "__version__"]
+__all__ = ["ANTIC", "ATRImage", "AudioOutput", "DiskDrive", "DisplaySurface", "GTIA", "Machine", "MasterClock", "PIA", "POKEY", "SIOBus", "XEXImage", "__version__"]

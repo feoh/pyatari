@@ -13,6 +13,7 @@ from pyatari.gtia import GTIA
 from pyatari.memory import MemoryBus
 from pyatari.pia import PIA
 from pyatari.pokey import POKEY
+from pyatari.sio import DiskDrive, SIOBus, XEXImage
 
 
 @dataclass(slots=True)
@@ -26,6 +27,7 @@ class Machine:
     antic: ANTIC = field(init=False)
     gtia: GTIA = field(init=False)
     pokey: POKEY = field(init=False)
+    sio: SIOBus = field(default_factory=SIOBus)
     display: DisplaySurface = field(default_factory=DisplaySurface)
 
     def __post_init__(self) -> None:
@@ -95,6 +97,16 @@ class Machine:
             self.step()
             steps += 1
         return steps
+
+    def load_xex(self, xex: bytes | XEXImage) -> XEXImage:
+        image = xex if isinstance(xex, XEXImage) else XEXImage.from_bytes(xex)
+        image.load_into(self.memory)
+        if image.run_address is not None:
+            self.cpu.pc = image.run_address
+        return image
+
+    def attach_disk(self, device_id: int, drive: DiskDrive) -> None:
+        self.sio.attach_disk(device_id, drive)
 
     def _render_visible_scanlines(self) -> None:
         row = self.antic.scanline - 1
