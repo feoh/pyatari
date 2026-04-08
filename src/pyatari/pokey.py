@@ -1,4 +1,4 @@
-"""POKEY timer, keyboard, IRQ, and random support for PyAtari."""
+"""POKEY timer, keyboard, IRQ, random, and basic sound support for PyAtari."""
 
 from __future__ import annotations
 
@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 
 from pyatari.constants import IRQBits, POKEYReadRegister, POKEYWriteRegister
 from pyatari.memory import MemoryBus
+
+DEFAULT_AUDIO_SAMPLE_RATE = 44_100
 
 POKEY_MIRROR_BASE = 0xD200
 POKEY_MIRROR_MASK = 0x0F
@@ -24,6 +26,11 @@ class PokeyTimer:
 
 
 @dataclass(slots=True)
+class PokeyAudioChannel:
+    phase: float = 0.0
+
+
+@dataclass(slots=True)
 class POKEY:
     memory: MemoryBus
     audf: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
@@ -39,6 +46,7 @@ class POKEY:
     allpot: int = 0xFF
     pot_values: list[int] = field(default_factory=lambda: [228] * 8)
     timers: list[PokeyTimer] = field(default_factory=lambda: [PokeyTimer() for _ in range(4)])
+    audio_channels: list[PokeyAudioChannel] = field(default_factory=lambda: [PokeyAudioChannel() for _ in range(4)])
     random_state: int = 0x1FFFF
 
     def install(self) -> None:
@@ -59,6 +67,7 @@ class POKEY:
         self.allpot = 0xFF
         self.pot_values = [228] * 8
         self.timers = [PokeyTimer() for _ in range(4)]
+        self.audio_channels = [PokeyAudioChannel() for _ in range(4)]
         self.random_state = 0x1FFFF
 
     def read_register(self, address: int) -> int:
@@ -82,13 +91,25 @@ class POKEY:
     def write_register(self, address: int, value: int) -> None:
         register = self._normalize(address)
         value &= 0xFF
-        if int(POKEYWriteRegister.AUDF1) <= register <= int(POKEYWriteRegister.AUDF4):
-            channel = (register - int(POKEYWriteRegister.AUDF1)) // 2
+        audf_registers = [
+            int(POKEYWriteRegister.AUDF1),
+            int(POKEYWriteRegister.AUDF2),
+            int(POKEYWriteRegister.AUDF3),
+            int(POKEYWriteRegister.AUDF4),
+        ]
+        audc_registers = [
+            int(POKEYWriteRegister.AUDC1),
+            int(POKEYWriteRegister.AUDC2),
+            int(POKEYWriteRegister.AUDC3),
+            int(POKEYWriteRegister.AUDC4),
+        ]
+        if register in audf_registers:
+            channel = audf_registers.index(register)
             self.audf[channel] = value
             self._reload_timer(channel)
             return
-        if int(POKEYWriteRegister.AUDC1) <= register <= int(POKEYWriteRegister.AUDC4):
-            channel = (register - int(POKEYWriteRegister.AUDC1)) // 2
+        if register in audc_registers:
+            channel = audc_registers.index(register)
             self.audc[channel] = value
             return
         if register == int(POKEYWriteRegister.AUDCTL):
@@ -145,6 +166,38 @@ class POKEY:
         self.kbcode = 0xFF
         self.skstat |= int(IRQBits.KEYBOARD)
         self.irqst |= int(IRQBits.KEYBOARD)
+
+    def channel_frequency(self, channel: int) -> float:
+        base_clock = 15_699.0 if (self.audctl & 0x01) else 63_921.0
+        period = max(1, self._timer_period(channel))
+        return base_clock / period
+
+    def channel_volume(self, channel: int) -> float:
+        return (self.audc[channel] & 0x0F) / 15.0
+
+    def generate_samples(self, sample_count: int, sample_rate: int = DEFAULT_AUDIO_SAMPLE_RATE) -> list[float]:
+        if sample_count < 0:
+            msg = "sample_count must be non-negative"
+            raise ValueError(msg)
+        if sample_rate <= 0:
+            msg = "sample_rate must be positive"
+            raise ValueError(msg)
+
+        samples: list[float] = []
+        for _ in range(sample_count):
+            mixed = 0.0
+            active = 0
+            for channel, state in enumerate(self.audio_channels):
+                volume = self.channel_volume(channel)
+                if volume <= 0.0:
+                    continue
+                frequency = self.channel_frequency(channel)
+                state.phase = (state.phase + (frequency / sample_rate)) % 1.0
+                waveform = 1.0 if state.phase < 0.5 else -1.0
+                mixed += waveform * volume
+                active += 1
+            samples.append(mixed / active if active else 0.0)
+        return samples
 
     def _reload_timer(self, channel: int) -> None:
         timer = self.timers[channel]

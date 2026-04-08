@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pyatari.audio import AudioOutput
 from pyatari.constants import IRQBits, POKEYReadRegister, POKEYWriteRegister, RESET_VECTOR
 from pyatari.machine import Machine
 from pyatari.memory import MemoryBus
@@ -49,6 +50,43 @@ def test_audctl_16bit_timer_pair_uses_combined_period():
     pokey.write_register(int(POKEYWriteRegister.STIMER), 0)
 
     assert pokey.timers[0].reload_value == 0x1235
+
+
+def test_channel_frequency_and_volume_reflect_registers():
+    pokey = POKEY(memory=MemoryBus())
+    pokey.write_register(int(POKEYWriteRegister.AUDF1), 3)
+    pokey.write_register(int(POKEYWriteRegister.AUDC1), 0x0F)
+
+    assert pokey.channel_frequency(0) == 63_921.0 / 4
+    assert pokey.channel_volume(0) == 1.0
+
+
+
+def test_generate_samples_produces_square_wave_levels():
+    pokey = POKEY(memory=MemoryBus())
+    pokey.write_register(int(POKEYWriteRegister.AUDF1), 0)
+    pokey.write_register(int(POKEYWriteRegister.AUDC1), 0x0F)
+
+    samples = pokey.generate_samples(8, sample_rate=4)
+
+    assert len(samples) == 8
+    assert max(samples) <= 1.0
+    assert min(samples) >= -1.0
+    assert any(sample > 0 for sample in samples)
+    assert any(sample < 0 for sample in samples)
+
+
+
+def test_audio_output_queues_samples_from_pokey():
+    pokey = POKEY(memory=MemoryBus())
+    pokey.write_register(int(POKEYWriteRegister.AUDC1), 0x0F)
+    audio = AudioOutput(sample_rate=8)
+
+    samples = audio.queue_from_pokey(pokey, 4)
+
+    assert len(samples) == 4
+    assert audio.buffers[-1] == samples
+
 
 
 def test_machine_installs_pokey_handlers_and_queues_irq():
