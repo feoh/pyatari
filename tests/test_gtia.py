@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pyatari.antic import DisplayListLine
-from pyatari.constants import GTIAReadRegister, GTIAWriteRegister, RESET_VECTOR
+from pyatari.constants import CHACTLBits, GTIAReadRegister, GTIAWriteRegister, RESET_VECTOR
 from pyatari.display import DisplaySurface
 from pyatari.gtia import DISPLAY_WIDTH, GTIA
 from pyatari.machine import Machine
@@ -63,6 +63,67 @@ def test_display_surface_copies_gtia_framebuffer():
     frame[0][0] = 0
 
     assert gtia.framebuffer[0][0] == 0x123456
+
+
+def test_render_scanline_inverse_text_uses_chactl():
+    memory = MemoryBus()
+    gtia = GTIA(memory=memory)
+    gtia.write_register(int(GTIAWriteRegister.COLPF1), 0x0E)
+    gtia.write_register(int(GTIAWriteRegister.COLBK), 0x00)
+    memory.write_byte(0x3000, 0xC1)
+    memory.write_byte(0x1608, 0b10000000)
+
+    line = DisplayListLine(instruction_address=0x2000, instruction=0x42, mode=2, scanlines=8, screen_address=0x3000)
+    gtia.render_scanline(line, row=0, antic_chbase=0x14, antic_chactl=0)
+    assert gtia.framebuffer[0][0] == gtia.color_to_rgb(0x00)
+    assert gtia.framebuffer[0][1] == gtia.color_to_rgb(0x0E)
+
+    gtia.render_scanline(line, row=1, antic_chbase=0x14, antic_chactl=int(CHACTLBits.INVERSE))
+    assert gtia.framebuffer[1][0] == gtia.color_to_rgb(0x00)
+    assert gtia.framebuffer[1][1] == gtia.color_to_rgb(0x00)
+
+
+
+def test_render_scanline_mode_6_double_width_and_chbase_switching():
+    memory = MemoryBus()
+    gtia = GTIA(memory=memory)
+    gtia.write_register(int(GTIAWriteRegister.COLPF2), 0x2E)
+    gtia.write_register(int(GTIAWriteRegister.COLPF0), 0x00)
+    memory.write_byte(0x3100, 0x41)
+    memory.write_byte(0x1608, 0b10000000)
+    memory.write_byte(0x2609, 0b01000000)
+
+    line = DisplayListLine(instruction_address=0x2000, instruction=0x46, mode=6, scanlines=8, screen_address=0x3100)
+    gtia.render_scanline(line, row=0, antic_chbase=0x14)
+    first_base = gtia.framebuffer[0][0]
+    second_base = gtia.framebuffer[0][2]
+
+    gtia.render_scanline(line, row=1, antic_chbase=0x24)
+
+    assert first_base == gtia.color_to_rgb(0x2E)
+    assert second_base == gtia.color_to_rgb(0x00)
+    assert gtia.framebuffer[1][0] == gtia.color_to_rgb(0x00)
+    assert gtia.framebuffer[1][2] == gtia.color_to_rgb(0x2E)
+
+
+
+def test_render_scanline_bitmap_mode_8_uses_playfield_colors():
+    memory = MemoryBus()
+    gtia = GTIA(memory=memory)
+    gtia.write_register(int(GTIAWriteRegister.COLBK), 0x00)
+    gtia.write_register(int(GTIAWriteRegister.COLPF0), 0x12)
+    gtia.write_register(int(GTIAWriteRegister.COLPF1), 0x24)
+    gtia.write_register(int(GTIAWriteRegister.COLPF2), 0x36)
+    memory.write_byte(0x3200, 0b00011011)
+
+    line = DisplayListLine(instruction_address=0x2000, instruction=0x48, mode=8, scanlines=8, screen_address=0x3200)
+    gtia.render_scanline(line, row=0)
+
+    assert gtia.framebuffer[0][0] == gtia.color_to_rgb(0x00)
+    assert gtia.framebuffer[0][9] == gtia.color_to_rgb(0x12)
+    assert gtia.framebuffer[0][18] == gtia.color_to_rgb(0x24)
+    assert gtia.framebuffer[0][27] == gtia.color_to_rgb(0x36)
+
 
 
 def test_machine_installs_gtia_handlers_and_renders_visible_line():

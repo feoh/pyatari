@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from pyatari.antic import DisplayListLine
-from pyatari.constants import ANTIC_MODES, GTIAReadRegister, GTIAWriteRegister
+from pyatari.constants import ANTIC_MODES, CHACTLBits, GTIAReadRegister, GTIAWriteRegister
 from pyatari.memory import MemoryBus
 
 GTIA_MIRROR_BASE = 0xD000
@@ -78,7 +78,14 @@ class GTIA:
         blue = int(brightness * (0.55 + 0.45 * ((phase + 0.66) % 1.0))) & 0xFF
         return (red << 16) | (green << 8) | blue
 
-    def render_scanline(self, line: DisplayListLine | None, *, row: int, antic_chbase: int = 0) -> None:
+    def render_scanline(
+        self,
+        line: DisplayListLine | None,
+        *,
+        row: int,
+        antic_chbase: int = 0,
+        antic_chactl: int = 0,
+    ) -> None:
         if not (0 <= row < DISPLAY_HEIGHT):
             return
         if line is None or line.mode is None or line.screen_address is None:
@@ -86,26 +93,109 @@ class GTIA:
             return
 
         mode_info = ANTIC_MODES.get(line.mode)
-        if mode_info is None or line.mode != 2:
+        if mode_info is None:
             self._fill_row(row, self.write_registers[int(GTIAWriteRegister.COLBK)])
             return
 
-        chars = [
-            self.memory.read_byte(line.screen_address + column)
-            for column in range(mode_info.bytes_per_line)
-        ]
-        fg = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLPF1)])
-        bg = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLBK)])
-        glyph_row = row % mode_info.scanlines_per_row
+        if mode_info.is_text:
+            self._render_text_mode(
+                line,
+                row=row,
+                antic_chbase=antic_chbase,
+                antic_chactl=antic_chactl,
+                columns=mode_info.bytes_per_line,
+                cell_width=8 if line.mode in {2, 3, 4, 5} else 16,
+            )
+            return
+
+        self._render_bitmap_mode(line, row=row)
+
+    def _render_text_mode(
+        self,
+        line: DisplayListLine,
+        *,
+        row: int,
+        antic_chbase: int,
+        antic_chactl: int,
+        columns: int,
+        cell_width: int,
+    ) -> None:
+        chars = [self.memory.read_byte(line.screen_address + column) for column in range(columns)]
+        glyph_row = row % ANTIC_MODES[line.mode].scanlines_per_row
+        fg_color = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLPF1)])
+        bg_color = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLBK)])
+        alt_fg = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLPF2)])
+        alt_bg = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLPF0)])
         out_row = self.framebuffer[row]
+
+        if antic_chactl & int(CHACTLBits.REFLECT):
+            glyph_row = 7 - (glyph_row % 8)
+        else:
+            glyph_row %= 8
+
         for column, char_code in enumerate(chars):
             glyph_address = ((antic_chbase & 0xFF) << 8) + ((char_code & 0x7F) * 8) + glyph_row
             pattern = self.memory.read_byte(glyph_address)
-            base_x = column * 8
+            inverse = bool(char_code & 0x80)
+            fg = alt_fg if line.mode in {4, 5, 6, 7} else fg_color
+            bg = alt_bg if line.mode in {4, 5, 6, 7} else bg_color
+            if inverse:
+                if antic_chactl & int(CHACTLBits.INVERSE):
+                    pattern = 0
+                else:
+                    pattern ^= 0xFF
+            base_x = column * cell_width
             for bit in range(8):
-                out_row[base_x + bit] = fg if pattern & (0x80 >> bit) else bg
-        for x in range(mode_info.bytes_per_line * 8, DISPLAY_WIDTH):
-            out_row[x] = bg
+                pixel = fg if pattern & (0x80 >> bit) else bg
+                x = base_x + bit * (cell_width // 8)
+                repeat = max(1, cell_width // 8)
+                for subpixel in range(repeat):
+                    if x + subpixel < DISPLAY_WIDTH:
+                        out_row[x + subpixel] = pixel
+
+        fill_from = min(DISPLAY_WIDTH, columns * cell_width)
+        for x in range(fill_from, DISPLAY_WIDTH):
+            out_row[x] = bg_color
+
+    def _render_bitmap_mode(self, line: DisplayListLine, *, row: int) -> None:
+        mode_info = ANTIC_MODES[line.mode]
+        data = [self.memory.read_byte(line.screen_address + index) for index in range(mode_info.bytes_per_line)]
+        out_row = self.framebuffer[row]
+        colors = [
+            self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLBK)]),
+            self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLPF0)]),
+            self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLPF1)]),
+            self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLPF2)]),
+        ]
+
+        pixels: list[int] = []
+        if line.mode in {8, 10, 13, 14}:
+            for byte in data:
+                for shift in (6, 4, 2, 0):
+                    pixels.append(colors[(byte >> shift) & 0x03])
+        elif line.mode in {9, 11, 12, 15}:
+            fg = colors[1]
+            bg = colors[0]
+            for byte in data:
+                for bit in range(8):
+                    pixels.append(fg if byte & (0x80 >> bit) else bg)
+        else:
+            self._fill_row(row, self.write_registers[int(GTIAWriteRegister.COLBK)])
+            return
+
+        repeat = max(1, DISPLAY_WIDTH // max(1, len(pixels)))
+        x = 0
+        for pixel in pixels:
+            for _ in range(repeat):
+                if x >= DISPLAY_WIDTH:
+                    break
+                out_row[x] = pixel
+                x += 1
+            if x >= DISPLAY_WIDTH:
+                break
+        while x < DISPLAY_WIDTH:
+            out_row[x] = colors[0]
+            x += 1
 
     def _fill_row(self, row: int, color_value: int) -> None:
         color = self.color_to_rgb(color_value)

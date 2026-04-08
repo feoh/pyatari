@@ -90,4 +90,9 @@ class Machine:
     def _render_visible_scanlines(self) -> None:
         row = self.antic.scanline - 1
         if self.antic.current_line is not None and 0 <= row < self.display.height:
-            self.gtia.render_scanline(self.antic.current_line, row=row, antic_chbase=self.antic.chbase)
+            self.gtia.render_scanline(
+                self.antic.current_line,
+                row=row,
+                antic_chbase=self.antic.chbase,
+                antic_chactl=self.antic.chactl,
+            )
