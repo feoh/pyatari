@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from pyatari.antic import ANTIC
 from pyatari.clock import MasterClock
-from pyatari.constants import CYCLES_PER_FRAME
+from pyatari.constants import CYCLES_PER_FRAME, CYCLES_PER_SCANLINE
 from pyatari.cpu import CPU, Opcode
 from pyatari.memory import MemoryBus
 from pyatari.pia import PIA
@@ -19,20 +20,36 @@ class Machine:
     cpu: CPU = field(init=False)
     clock: MasterClock = field(default_factory=MasterClock)
     pia: PIA = field(init=False)
+    antic: ANTIC = field(init=False)
 
     def __post_init__(self) -> None:
         self.cpu = CPU(memory=self.memory)
         self.pia = PIA(memory=self.memory)
         self.pia.install()
+        self.antic = ANTIC(memory=self.memory)
+        self.antic.install()
 
     def reset(self) -> None:
         self.clock.reset()
+        self.antic.reset()
         self.cpu.reset()
 
     def step(self) -> Opcode:
+        if self.antic.consume_wsync():
+            remaining = (-self.antic.cycles_into_scanline) % CYCLES_PER_SCANLINE
+            if remaining:
+                self.clock.tick_instruction(remaining)
+                events = self.antic.tick(remaining)
+                if "dli" in events or "vbi" in events:
+                    self.cpu.nmi()
+
         before = self.cpu.cycles
         opcode = self.cpu.step()
-        self.clock.tick_instruction(self.cpu.cycles - before)
+        elapsed = self.cpu.cycles - before
+        self.clock.tick_instruction(elapsed)
+        events = self.antic.tick(elapsed)
+        if "dli" in events or "vbi" in events:
+            self.cpu.nmi()
         return opcode
 
     def run_steps(self, steps: int) -> list[Opcode]:
