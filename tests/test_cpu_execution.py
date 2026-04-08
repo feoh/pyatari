@@ -137,3 +137,13 @@ def test_rol_and_ror_accumulator_use_carry():
 
     assert cpu.a == 0x80
     assert cpu.status.carry is True
+
+
+def test_inx_twenty_times_reaches_twenty():
+    cpu = make_cpu(bytes([0xE8] * 20))
+    cpu.x = 0
+
+    for _ in range(20):
+        cpu.step()
+
+    assert cpu.x == 20
