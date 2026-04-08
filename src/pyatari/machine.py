@@ -4,17 +4,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from pyatari.constants import IRQBits, JoystickBits
+from pyatari.constants import CYCLES_PER_FRAME, CYCLES_PER_SCANLINE, FRAMES_PER_SECOND, IRQBits, JoystickBits
 
 from pyatari.antic import ANTIC
+from pyatari.audio import AudioOutput
 from pyatari.clock import MasterClock
-from pyatari.constants import CYCLES_PER_FRAME, CYCLES_PER_SCANLINE
 from pyatari.cpu import CPU, Opcode
 from pyatari.display import DisplaySurface
 from pyatari.gtia import GTIA
 from pyatari.memory import MemoryBus
 from pyatari.pia import PIA
-from pyatari.pokey import POKEY
+from pyatari.pokey import DEFAULT_AUDIO_SAMPLE_RATE, POKEY
 from pyatari.sio import DiskDrive, SIOBus, XEXImage
 
 
@@ -61,6 +61,16 @@ KEYCODE_MAP = {
 
 
 @dataclass(slots=True)
+class MachineStatus:
+    pc: int
+    scanline: int
+    frame: int
+    fps: int
+    turbo: bool
+    total_cycles: int
+
+
+@dataclass(slots=True)
 class Machine:
     """Own the major emulator subsystems and drive execution."""
 
@@ -73,6 +83,8 @@ class Machine:
     pokey: POKEY = field(init=False)
     sio: SIOBus = field(default_factory=SIOBus)
     display: DisplaySurface = field(default_factory=DisplaySurface)
+    audio: AudioOutput = field(default_factory=AudioOutput)
+    turbo: bool = False
 
     def __post_init__(self) -> None:
         self.cpu = CPU(memory=self.memory)
@@ -134,12 +146,15 @@ class Machine:
         msg = f"CPU did not reach address {address:#06x} within {max_steps} steps"
         raise TimeoutError(msg)
 
-    def run_frame(self) -> int:
+    def run_frame(self, *, queue_audio: bool = True, audio_samples: int | None = None) -> int:
         target_cycles = self.clock.total_cycles + CYCLES_PER_FRAME
         steps = 0
         while self.clock.total_cycles < target_cycles:
             self.step()
             steps += 1
+        if queue_audio:
+            sample_count = audio_samples if audio_samples is not None else self._samples_per_frame()
+            self.audio.queue_from_pokey(self.pokey, sample_count)
         return steps
 
     def load_xex(self, xex: bytes | XEXImage) -> XEXImage:
@@ -151,6 +166,34 @@ class Machine:
 
     def attach_disk(self, device_id: int, drive: DiskDrive) -> None:
         self.sio.attach_disk(device_id, drive)
+
+    def set_turbo(self, enabled: bool) -> None:
+        self.turbo = enabled
+
+    def status(self) -> MachineStatus:
+        return MachineStatus(
+            pc=self.cpu.pc,
+            scanline=self.clock.scanline,
+            frame=self.clock.frame,
+            fps=FRAMES_PER_SECOND,
+            turbo=self.turbo,
+            total_cycles=self.clock.total_cycles,
+        )
+
+    def boot_xex(self, xex: bytes | XEXImage, *, max_steps: int = 100_000) -> int:
+        image = self.load_xex(xex)
+        if image.run_address is None:
+            msg = "XEX image has no run address"
+            raise ValueError(msg)
+        return self.run_until(image.run_address, max_steps=max_steps)
+
+    def run_program(self, program: bytes, *, start: int = 0x2000, steps: int = 1) -> int:
+        self.memory.load_ram(start, program)
+        self.memory.write_word(0xFFFC, start)
+        self.reset()
+        self.cpu.pc = start
+        self.run_steps(steps)
+        return self.cpu.pc
 
     def press_key(self, key: str) -> None:
         self.pokey.press_key(KEYCODE_MAP[key.lower()])
@@ -239,3 +282,6 @@ class Machine:
                 antic_hscrol=self.antic.hscrol,
                 antic_vscrol=self.antic.vscrol,
             )
+
+    def _samples_per_frame(self) -> int:
+        return max(1, DEFAULT_AUDIO_SAMPLE_RATE // FRAMES_PER_SECOND)
