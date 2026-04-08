@@ -12,6 +12,7 @@ from pyatari.display import DisplaySurface
 from pyatari.gtia import GTIA
 from pyatari.memory import MemoryBus
 from pyatari.pia import PIA
+from pyatari.pokey import POKEY
 
 
 @dataclass(slots=True)
@@ -24,6 +25,7 @@ class Machine:
     pia: PIA = field(init=False)
     antic: ANTIC = field(init=False)
     gtia: GTIA = field(init=False)
+    pokey: POKEY = field(init=False)
     display: DisplaySurface = field(default_factory=DisplaySurface)
 
     def __post_init__(self) -> None:
@@ -34,11 +36,14 @@ class Machine:
         self.antic.install()
         self.gtia = GTIA(memory=self.memory)
         self.gtia.install()
+        self.pokey = POKEY(memory=self.memory)
+        self.pokey.install()
 
     def reset(self) -> None:
         self.clock.reset()
         self.antic.reset()
         self.gtia.reset()
+        self.pokey.reset()
         self.cpu.reset()
 
     def step(self) -> Opcode:
@@ -47,6 +52,8 @@ class Machine:
             if remaining:
                 self.clock.tick_instruction(remaining)
                 events = self.antic.tick(remaining)
+                if self.pokey.tick(remaining):
+                    self.cpu.irq()
                 if "dli" in events or "vbi" in events:
                     self.cpu.nmi()
 
@@ -55,6 +62,8 @@ class Machine:
         elapsed = self.cpu.cycles - before
         self.clock.tick_instruction(elapsed)
         events = self.antic.tick(elapsed)
+        if self.pokey.tick(elapsed):
+            self.cpu.irq()
         if "dli" in events or "vbi" in events:
             self.cpu.nmi()
         self._render_visible_scanlines()
