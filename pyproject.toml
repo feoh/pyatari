@@ -30,6 +30,9 @@ packages = ["src/pyatari"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "slow: long-running validation tests such as the Klaus 6502 functional suite",
+]
 
 [tool.ruff]
 line-length = 100
