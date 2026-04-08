@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from pyatari.addressing import AddressResult, resolve_address
-from pyatari.constants import IRQ_VECTOR, RESET_VECTOR
+from pyatari.constants import IRQ_VECTOR, NMI_VECTOR, RESET_VECTOR
 from pyatari.memory import MemoryBus
 from pyatari.opcodes import AddressMode, OPCODES, Opcode
 
@@ -61,6 +61,8 @@ class CPU:
     cycles: int = 0
     last_opcode: Opcode | None = None
     last_address: AddressResult | None = None
+    irq_pending: bool = False
+    nmi_pending: bool = False
 
     def reset(self) -> None:
         self.a = 0
@@ -72,6 +74,8 @@ class CPU:
         self.cycles = 0
         self.last_opcode = None
         self.last_address = None
+        self.irq_pending = False
+        self.nmi_pending = False
 
     def fetch(self) -> int:
         value = self.memory.read_byte(self.pc)
@@ -86,6 +90,14 @@ class CPU:
             raise ValueError(msg) from exc
 
     def step(self) -> Opcode:
+        if self.nmi_pending:
+            self.nmi_pending = False
+            return self._service_interrupt(NMI_VECTOR, break_flag=False, cycle_cost=7)
+
+        if self.irq_pending and not self.status.interrupt_disable:
+            self.irq_pending = False
+            return self._service_interrupt(IRQ_VECTOR, break_flag=False, cycle_cost=7)
+
         opcode_byte = self.fetch()
         opcode = self.decode(opcode_byte)
         self.last_opcode = opcode
@@ -339,6 +351,26 @@ class CPU:
         self.status.overflow = ((original_a ^ value) & (original_a ^ result) & 0x80) != 0
         self.a = result
         self._update_nz(self.a)
+
+    def irq(self) -> None:
+        self.irq_pending = True
+
+    def nmi(self) -> None:
+        self.nmi_pending = True
+
+    def _service_interrupt(self, vector: int, *, break_flag: bool, cycle_cost: int) -> Opcode:
+        self._push_word(self.pc)
+        flags = self.status.to_byte() & ~0x10
+        if break_flag:
+            flags |= 0x10
+        self._push_byte(flags)
+        self.status.interrupt_disable = True
+        self.pc = self.memory.read_word(vector)
+        interrupt_opcode = Opcode(0x00, "INT", AddressMode.IMPLIED, 1, cycle_cost)
+        self.last_opcode = interrupt_opcode
+        self.last_address = AddressResult(address=None)
+        self.cycles += cycle_cost
+        return interrupt_opcode
 
     def _push_byte(self, value: int) -> None:
         self.memory.write_byte(STACK_BASE + self.sp, value & 0xFF)
