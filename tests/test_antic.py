@@ -77,6 +77,8 @@ def test_blank_instruction_scanline_count_is_decoded():
 def test_vbi_and_dli_set_nmist_bits():
     memory = MemoryBus()
     antic = ANTIC(memory=memory)
+    antic.dmactl = 0x22  # enable DL DMA + normal playfield
+    antic.nmien = int(NMIBits.DLI) | int(NMIBits.VBI)
     antic.display_list_pc = 0x2300
     memory.load_ram(0x2300, bytes([0x80, 0x40, 0x00, 0x20]))
 
@@ -112,6 +114,8 @@ def test_machine_nmi_is_queued_from_antic_events():
     machine.memory.load_ram(0x2000, bytes([0xEA, 0xEA]))
     machine.reset()
     machine.cpu.pc = 0x2000
+    machine.antic.dmactl = 0x22  # enable DL DMA
+    machine.antic.nmien = int(NMIBits.DLI) | int(NMIBits.VBI)
     machine.antic.display_list_pc = 0x2400
     machine.memory.load_ram(0x2400, bytes([0x80]))
     machine.antic.cycles_into_scanline = CYCLES_PER_SCANLINE - 2

@@ -156,6 +156,7 @@ def test_machine_installs_gtia_handlers_and_renders_visible_line():
     machine.memory.write_byte(0x3000, 0x41)
     machine.memory.write_byte(0x1608, 0b10000000)
     machine.reset()
+    machine.memory.write_byte(0xD400, 0x22)  # enable DL DMA + normal playfield
     machine.memory.write_byte(0xD403, 0x24)
     machine.memory.write_byte(0xD402, 0x00)
     machine.memory.write_byte(int(GTIAWriteRegister.COLPF1), 0x0E)

@@ -319,15 +319,45 @@ class Machine:
 def main() -> None:
     """Entry point for the ``pyatari`` console script."""
     import argparse
+    from pathlib import Path
+
+    from pyatari.rom_loader import load_basic_rom, load_os_rom
 
     parser = argparse.ArgumentParser(description="PyAtari — Atari 800 emulator")
     parser.add_argument("xex", nargs="?", help="XEX executable to load")
     parser.add_argument(
-        "--frames", type=int, default=1, help="number of frames to run (default: 1)"
+        "--frames", type=int, default=None,
+        help="run N frames headless (omit for interactive pygame window)",
+    )
+    parser.add_argument(
+        "--scale", type=int, default=2,
+        help="integer display scale factor (default: 2)",
+    )
+    parser.add_argument(
+        "--rom-dir", type=Path, default=None,
+        help="directory containing ROM files (default: roms/ next to package)",
     )
     args = parser.parse_args()
 
+    # Locate ROM directory: explicit flag, or roms/ beside the source tree
+    rom_dir: Path = args.rom_dir or Path(__file__).resolve().parent.parent.parent / "roms"
+
     machine = Machine()
+
+    # Load ROMs if available
+    os_rom_path = rom_dir / "atarixl.rom"
+    basic_rom_path = rom_dir / "ataribas.rom"
+    if os_rom_path.exists():
+        os_rom = load_os_rom(os_rom_path)
+        machine.memory.load_os_rom(os_rom.data)
+        print(f"Loaded OS ROM: {os_rom_path}")
+    else:
+        print(f"Warning: OS ROM not found at {os_rom_path}")
+    if basic_rom_path.exists():
+        basic_rom = load_basic_rom(basic_rom_path)
+        machine.memory.load_basic_rom(basic_rom.data)
+        print(f"Loaded BASIC ROM: {basic_rom_path}")
+
     machine.reset()
 
     if args.xex:
@@ -344,11 +374,16 @@ def main() -> None:
             f"{len(image.segments)} segment(s), run address {run_addr}"
         )
 
-    for _ in range(args.frames):
-        machine.run_frame(queue_audio=False)
+    if args.frames is not None:
+        for _ in range(args.frames):
+            machine.run_frame(queue_audio=False)
 
-    st = machine.status()
-    print(
-        f"PyAtari: {st.frame} frame(s) executed, "
-        f"PC=${st.pc:04X}, {st.total_cycles} cycles"
-    )
+        st = machine.status()
+        print(
+            f"PyAtari: {st.frame} frame(s) executed, "
+            f"PC=${st.pc:04X}, {st.total_cycles} cycles"
+        )
+    else:
+        from pyatari.frontend import run
+
+        run(machine, scale=args.scale)

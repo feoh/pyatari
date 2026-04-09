@@ -14,6 +14,7 @@ from pyatari.constants import (
     DL_MODE_MASK,
     DL_VSCROL_BIT,
     DLInstruction,
+    DMACTLBits,
     NMIBits,
     SCANLINES_PER_FRAME,
     VBLANK_START_SCANLINE,
@@ -22,6 +23,7 @@ from pyatari.memory import MemoryBus
 
 ANTIC_MIRROR_BASE = int(ANTICRegister.DMACTL)
 ANTIC_MIRROR_MASK = 0x0F
+DL_DMA = int(DMACTLBits.DL_DMA)
 
 
 @dataclass(slots=True)
@@ -213,8 +215,12 @@ class ANTIC:
 
     def step_scanline(self, *, trigger_nmi: bool = True) -> DisplayListLine | None:
         if self.current_line_remaining <= 0:
-            self.current_line = self.fetch_next_display_list_line()
-            self.current_line_remaining = max(1, self.current_line.scanlines)
+            if self.dmactl & DL_DMA:
+                self.current_line = self.fetch_next_display_list_line()
+                self.current_line_remaining = max(1, self.current_line.scanlines)
+            else:
+                self.current_line = None
+                self.current_line_remaining = 1
 
         active_line = self.current_line
         self.current_line_remaining -= 1
@@ -234,9 +240,9 @@ class ANTIC:
         events: list[str] = []
         if line is not None:
             events.append("scanline")
-        if self.nmist & int(NMIBits.DLI):
+        if self.nmist & self.nmien & int(NMIBits.DLI):
             events.append("dli")
-        if self.nmist & int(NMIBits.VBI):
+        if self.nmist & self.nmien & int(NMIBits.VBI):
             events.append("vbi")
         return events
 
