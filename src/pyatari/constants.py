@@ -449,6 +449,9 @@ ANTIC_MODES: dict[int, ANTICModeInfo] = {
 
 class ShadowRegister(IntEnum):
     """OS shadow register locations in RAM."""
+    SAVMSC = 0x0058   # Screen memory pointer (2 bytes)
+    RAMTOP = 0x006A   # Top of usable RAM in pages
+    DLPTR = 0x0064    # Display list pointer workspace (2 bytes)
     SDMCTL = 0x022F   # Shadow of ANTIC DMACTL
     SDLSTL = 0x0230   # Shadow of ANTIC DLISTL (low byte)
     SDLSTH = 0x0231   # Shadow of ANTIC DLISTH (high byte)

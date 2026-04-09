@@ -32,6 +32,7 @@ PYGAME_TO_ATARI_KEY: dict[int, str] = {
     pygame.K_8: "8", pygame.K_9: "9",
     pygame.K_SPACE: "space",
     pygame.K_RETURN: "return",
+    pygame.K_BACKSPACE: "backspace",
 }
 
 
@@ -80,6 +81,12 @@ def _handle_events(machine: Machine) -> bool:
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
                 return False
+            if event.key in {pygame.K_RETURN, pygame.K_BACKSPACE}:
+                machine.press_key(PYGAME_TO_ATARI_KEY[event.key])
+                continue
+            if event.unicode and " " <= event.unicode <= "~":
+                machine.press_key(event.unicode)
+                continue
             if event.key in PYGAME_TO_ATARI_KEY:
                 machine.press_key(PYGAME_TO_ATARI_KEY[event.key])
             elif event.key == pygame.K_F2:

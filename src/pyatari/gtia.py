@@ -12,6 +12,7 @@ from pyatari.constants import (
     GTIAWriteRegister,
     PM_SIZE_DOUBLE,
     PM_SIZE_QUAD,
+    PORTBBits,
 )
 from pyatari.memory import MemoryBus
 
@@ -60,6 +61,8 @@ class GTIA:
 
     def read_register(self, address: int) -> int:
         register = self._normalize(address)
+        if register == int(GTIAReadRegister.TRIG3):
+            return 0x01 if (self.memory.portb & int(PORTBBits.BASIC_ROM_ENABLE)) else 0x00
         if register in self.read_registers:
             return self.read_registers[register]
         if register in self.write_registers:
@@ -70,8 +73,7 @@ class GTIA:
         register = self._normalize(address)
         value &= 0xFF
         if register == int(GTIAWriteRegister.HITCLR):
-            for key in self.read_registers:
-                self.read_registers[key] = 0
+            self._clear_collision_registers()
             return
         if register in self.write_registers:
             self.write_registers[register] = value
@@ -312,10 +314,15 @@ class GTIA:
         self.framebuffer[row] = shifted
 
     def _reset_input_registers(self) -> None:
-        for register in range(int(GTIAReadRegister.TRIG0), int(GTIAReadRegister.TRIG3) + 1):
+        self._clear_collision_registers()
+        for register in range(int(GTIAReadRegister.TRIG0), int(GTIAReadRegister.TRIG2) + 1):
             self.read_registers[register] = 0x01
         self.read_registers[int(GTIAReadRegister.CONSOL)] = 0x07
-        self.read_registers[int(GTIAReadRegister.PAL)] = 0x0F
+        self.read_registers[int(GTIAReadRegister.PAL)] = 0x01
+
+    def _clear_collision_registers(self) -> None:
+        for register in range(int(GTIAReadRegister.M0PF), int(GTIAReadRegister.P3PL) + 1):
+            self.read_registers[register] = 0x00
 
     def _fill_row(self, row: int, color_value: int) -> None:
         color = self.color_to_rgb(color_value)

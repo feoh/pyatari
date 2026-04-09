@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from pyatari.audio import AudioOutput
-from pyatari.constants import IRQBits, POKEYReadRegister, POKEYWriteRegister, RESET_VECTOR
+from pyatari.constants import AUDCTLBits, IRQBits, POKEYReadRegister, POKEYWriteRegister, RESET_VECTOR
 from pyatari.machine import Machine
 from pyatari.memory import MemoryBus
-from pyatari.pokey import POKEY
+from pyatari.pokey import (
+    CPU_CYCLES_PER_POKEY_15KHZ_TICK,
+    CPU_CYCLES_PER_POKEY_64KHZ_TICK,
+    POKEY,
+)
 
 
 def test_timer_countdown_sets_irq_status_when_enabled():
@@ -15,7 +19,7 @@ def test_timer_countdown_sets_irq_status_when_enabled():
     pokey.write_register(int(POKEYWriteRegister.IRQEN), int(IRQBits.TIMER1))
     pokey.write_register(int(POKEYWriteRegister.STIMER), 0)
 
-    irq = pokey.tick(3)
+    irq = pokey.tick(3 * CPU_CYCLES_PER_POKEY_64KHZ_TICK)
 
     assert irq is True
     assert pokey.read_register(int(POKEYReadRegister.IRQST)) & int(IRQBits.TIMER1) == 0
@@ -50,6 +54,16 @@ def test_audctl_16bit_timer_pair_uses_combined_period():
     pokey.write_register(int(POKEYWriteRegister.STIMER), 0)
 
     assert pokey.timers[0].reload_value == 0x1235
+
+
+def test_timer_clock_divider_uses_15khz_and_179mhz_modes():
+    pokey = POKEY(memory=MemoryBus())
+
+    pokey.write_register(int(POKEYWriteRegister.AUDCTL), int(AUDCTLBits.CLOCK_15KHZ))
+    assert pokey._timer_clock_divider(0) == CPU_CYCLES_PER_POKEY_15KHZ_TICK
+
+    pokey.write_register(int(POKEYWriteRegister.AUDCTL), int(AUDCTLBits.CH1_179MHZ))
+    assert pokey._timer_clock_divider(0) == 1
 
 
 def test_channel_frequency_and_volume_reflect_registers():
@@ -99,7 +113,10 @@ def test_machine_installs_pokey_handlers_and_queues_irq():
     machine.memory.write_byte(int(POKEYWriteRegister.IRQEN), int(IRQBits.TIMER1))
     machine.memory.write_byte(int(POKEYWriteRegister.STIMER), 0)
 
-    machine.step()
+    for _ in range(40):
+        machine.step()
+        if machine.cpu.irq_pending:
+            break
 
     assert machine.cpu.irq_pending is True
     assert machine.memory.read_byte(int(POKEYReadRegister.IRQST)) & int(IRQBits.TIMER1) == 0

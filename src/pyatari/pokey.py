@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from pyatari.constants import IRQBits, POKEYReadRegister, POKEYWriteRegister
+from pyatari.constants import AUDCTLBits, IRQBits, POKEYReadRegister, POKEYWriteRegister
 from pyatari.memory import MemoryBus
 
 DEFAULT_AUDIO_SAMPLE_RATE = 44_100
+CPU_CYCLES_PER_POKEY_64KHZ_TICK = 28
+CPU_CYCLES_PER_POKEY_15KHZ_TICK = 114
 
 POKEY_MIRROR_BASE = 0xD200
 POKEY_MIRROR_MASK = 0x0F
@@ -23,6 +25,7 @@ class PokeyTimer:
     reload_value: int = 1
     counter: int = 1
     enabled: bool = False
+    cycle_accumulator: int = 0
 
 
 @dataclass(slots=True)
@@ -136,19 +139,15 @@ class POKEY:
 
     def tick(self, cycles: int) -> bool:
         irq_triggered = False
-        for _ in range(cycles):
-            for channel, timer in enumerate(self.timers):
-                if not timer.enabled:
-                    continue
-                timer.counter -= 1
-                if timer.counter > 0:
-                    continue
-                timer.counter = timer.reload_value
-                irq_bit = self._timer_irq_bit(channel)
-                if irq_bit is not None:
-                    self.irqst &= ~irq_bit & 0xFF
-                    if self.irqen & irq_bit:
-                        irq_triggered = True
+        for channel, timer in enumerate(self.timers):
+            if not timer.enabled:
+                continue
+            divider = self._timer_clock_divider(channel)
+            timer.cycle_accumulator += cycles
+            timer_ticks, timer.cycle_accumulator = divmod(timer.cycle_accumulator, divider)
+            if timer_ticks == 0:
+                continue
+            irq_triggered |= self._advance_timer(channel, timer, timer_ticks)
         return irq_triggered
 
     def start_timers(self) -> None:
@@ -156,6 +155,10 @@ class POKEY:
             timer.enabled = True
             timer.reload_value = self._timer_period(channel)
             timer.counter = timer.reload_value
+            timer.cycle_accumulator = 0
+        self.irqst |= (
+            int(IRQBits.TIMER1) | int(IRQBits.TIMER2) | int(IRQBits.TIMER4)
+        )
 
     def press_key(self, keycode: int) -> None:
         self.kbcode = keycode & 0xFF
@@ -213,6 +216,7 @@ class POKEY:
         timer = self.timers[channel]
         timer.reload_value = self._timer_period(channel)
         timer.counter = timer.reload_value
+        timer.cycle_accumulator = 0
 
     def _timer_period(self, channel: int) -> int:
         if channel == 0 and self.audctl & 0x10:
@@ -223,6 +227,31 @@ class POKEY:
 
     def _timer_irq_bit(self, channel: int) -> int | None:
         return CHANNEL_TO_IRQ.get(channel)
+
+    def _timer_clock_divider(self, channel: int) -> int:
+        if channel in {0, 1} and self.audctl & int(AUDCTLBits.CH1_179MHZ):
+            return 1
+        if channel in {2, 3} and self.audctl & int(AUDCTLBits.CH3_179MHZ):
+            return 1
+        if self.audctl & int(AUDCTLBits.CLOCK_15KHZ):
+            return CPU_CYCLES_PER_POKEY_15KHZ_TICK
+        return CPU_CYCLES_PER_POKEY_64KHZ_TICK
+
+    def _advance_timer(self, channel: int, timer: PokeyTimer, ticks: int) -> bool:
+        irq_triggered = False
+        while ticks > 0:
+            if ticks < timer.counter:
+                timer.counter -= ticks
+                break
+            ticks -= timer.counter
+            timer.counter = timer.reload_value
+            irq_bit = self._timer_irq_bit(channel)
+            if irq_bit is None:
+                continue
+            if self.irqen & irq_bit:
+                self.irqst &= ~irq_bit & 0xFF
+                irq_triggered = True
+        return irq_triggered
 
     def _next_random_byte(self) -> int:
         bit = ((self.random_state >> 16) ^ (self.random_state >> 11)) & 1

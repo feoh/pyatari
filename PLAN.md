@@ -156,6 +156,42 @@ Each phase is sized for one Claude session (~2-4 hours). Each produces something
 - **Test with real ROMs**: Boot to MEMO PAD or BASIC READY, type on keyboard, run `10 PRINT "HELLO" : GOTO 10`
 - **Test without ROMs**: Load and run a raw XEX binary
 
+#### Phase 16A: Replace the Synthetic Shell with Real ROM Boot
+- Remove the synthetic BASIC/MEMO PAD shell as the default success path once the ROMs can drive the screen themselves.
+- Keep a temporary debug-only escape hatch so the real ROM boot path can be exercised even before it is complete.
+- Add ROM boot tracing utilities that report PC, ANTIC registers, and key OS state while stepping through reset.
+
+#### Phase 16B: Real Power-On and OS Reset Semantics
+- Match Atari power-on defaults more closely for CPU-visible state, GTIA/POKEY/PIA/ANTIC registers, warmstart flags, and RAM shadows used by the OS.
+- Validate PORTB banking, self-test visibility, and OS/BASIC handoff against expected XL startup behavior.
+- Confirm reset/NMI/IRQ sequencing matches the OS assumptions during early boot.
+
+#### Phase 16C: ANTIC/GTIA Bring-Up Required by the OS
+- Implement the missing ANTIC and GTIA behavior the OS uses before enabling the display: shadow register consumption, display-list handoff, color initialization, DMA side effects, and relevant register mirroring.
+- Verify that real ROM boot eventually programs `DMACTL`, `SDLSTL`/display list pointers, `CHBASE`, and color registers without synthetic help.
+- Add milestone tests for “first non-black frame from ROMs” before aiming for the full READY prompt.
+
+#### Phase 16D: POKEY/Keyboard/Timer Behavior Required by the OS
+- Flesh out the OS-visible keyboard scan path, debounce/status bits, console keys, and IRQ behavior used during cold start and editor/BASIC input.
+- Improve timer semantics and IRQ timing where the XL ROM relies on them during initialization.
+- Add focused tests around ROM-observable keyboard and timer expectations instead of shell-level text entry.
+
+#### Phase 16E: SIO/Device and BASIC Startup Integration
+- Implement the boot-time device interactions and OS vectors needed for disk/XEX loading and BASIC cartridge presence detection.
+- Verify the machine can reach MEMO PAD with only OS ROM and BASIC READY when BASIC ROM is present.
+- Replace shell-backed command execution tests with real ROM-driven keystroke tests.
+
+#### Phase 16F: End-to-End Validation
+- Boot with real ROMs to actual MEMO PAD/BASIC READY without synthetic screen generation.
+- Type and run a small BASIC program through the real editor and BASIC interpreter.
+- Keep ROM-free XEX execution working as a separate path, not as a substitute for ROM boot correctness.
+
+#### Current Real-ROM Findings
+- As of 2026-04-09, the real ROM path does execute from the XL reset vector, but it does not yet reach display initialization.
+- After 200,000 CPU steps the machine is still around `$C2F0` with `DMACTL=$00`, `DLIST=$0000`, and `CHBASE=$00`.
+- After 2,000,000 CPU steps the machine reaches roughly `$C057`, but ANTIC setup is still absent, which indicates missing hardware behavior rather than a pure timing delay.
+- The immediate development focus should be identifying which OS-visible register defaults, RAM shadows, and chip side effects are still wrong during cold start.
+
 ### Phase 17 (Optional): Additional Peripherals
 - Cassette (CAS format), printer emulation, second joystick, paddle controllers
 

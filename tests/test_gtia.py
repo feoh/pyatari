@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pyatari.antic import DisplayListLine
-from pyatari.constants import CHACTLBits, GTIAReadRegister, GTIAWriteRegister, RESET_VECTOR
+from pyatari.constants import CHACTLBits, GTIAReadRegister, GTIAWriteRegister, PORTBBits, RESET_VECTOR
 from pyatari.display import DisplaySurface
 from pyatari.gtia import DISPLAY_WIDTH, GTIA
 from pyatari.machine import Machine
@@ -25,6 +25,27 @@ def test_hitclr_clears_collision_registers():
     gtia.write_register(int(GTIAWriteRegister.HITCLR), 0x00)
 
     assert gtia.read_register(int(GTIAReadRegister.P0PF)) == 0
+
+
+def test_hitclr_preserves_input_registers():
+    gtia = GTIA(memory=MemoryBus())
+    gtia.set_console_switch(start=True)
+
+    gtia.write_register(int(GTIAWriteRegister.HITCLR), 0x00)
+
+    assert gtia.read_register(int(GTIAReadRegister.CONSOL)) == 0x06
+    assert gtia.read_register(int(GTIAReadRegister.PAL)) == 0x01
+
+
+def test_trig3_reflects_basic_rom_enable_flag():
+    memory = MemoryBus()
+    gtia = GTIA(memory=memory)
+
+    assert gtia.read_register(int(GTIAReadRegister.TRIG3)) == 0x01
+
+    memory.update_bank_config(memory.portb & ~int(PORTBBits.BASIC_ROM_ENABLE))
+
+    assert gtia.read_register(int(GTIAReadRegister.TRIG3)) == 0x00
 
 
 def test_color_to_rgb_changes_with_input():
