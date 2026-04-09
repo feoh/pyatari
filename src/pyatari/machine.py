@@ -314,3 +314,41 @@ class Machine:
 
     def _samples_per_frame(self) -> int:
         return max(1, DEFAULT_AUDIO_SAMPLE_RATE // FRAMES_PER_SECOND)
+
+
+def main() -> None:
+    """Entry point for the ``pyatari`` console script."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="PyAtari — Atari 800 emulator")
+    parser.add_argument("xex", nargs="?", help="XEX executable to load")
+    parser.add_argument(
+        "--frames", type=int, default=1, help="number of frames to run (default: 1)"
+    )
+    args = parser.parse_args()
+
+    machine = Machine()
+    machine.reset()
+
+    if args.xex:
+        from pathlib import Path
+
+        xex_path = Path(args.xex)
+        xex_data = xex_path.read_bytes()
+        image = machine.load_xex(xex_data)
+        run_addr = (
+            f"${image.run_address:04X}" if image.run_address is not None else "none"
+        )
+        print(
+            f"Loaded {xex_path.name}: "
+            f"{len(image.segments)} segment(s), run address {run_addr}"
+        )
+
+    for _ in range(args.frames):
+        machine.run_frame(queue_audio=False)
+
+    st = machine.status()
+    print(
+        f"PyAtari: {st.frame} frame(s) executed, "
+        f"PC=${st.pc:04X}, {st.total_cycles} cycles"
+    )
