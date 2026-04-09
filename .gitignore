@@ -11,3 +11,4 @@ build/
 *.rom
 *.bin
 !tests/roms/*.bin
+.codex
