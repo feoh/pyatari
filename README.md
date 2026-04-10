@@ -49,3 +49,8 @@ machine code or XEX executables directly.
 ```bash
 uv run pytest
 ```
+
+## Architecture Decisions
+
+Architecture Decision Records live under `docs/adr/`. These documents capture
+important design choices and the reasoning behind them as the emulator evolves.

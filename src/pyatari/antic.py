@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from pyatari.constants import (
     ANTIC_MODES,
@@ -60,6 +60,8 @@ class ANTIC:
     current_line: DisplayListLine | None = None
     current_line_remaining: int = 0
     wsync_requested: bool = False
+    _last_triggered_events: list[str] = field(default_factory=list)
+    _nmi_asserted: bool = False
 
     def install(self) -> None:
         self.memory.register_read_handler(0xD400, 0xD4FF, self.read_register)
@@ -82,6 +84,8 @@ class ANTIC:
         self.current_line = None
         self.current_line_remaining = 0
         self.wsync_requested = False
+        self._last_triggered_events = []
+        self._nmi_asserted = False
 
     def read_register(self, address: int) -> int:
         register = self._normalize(address)
@@ -139,7 +143,11 @@ class ANTIC:
         elif register == ANTICRegister.WSYNC:
             self.wsync_requested = True
         elif register == ANTICRegister.NMIEN:
+            previous_nmien = self.nmien
             self.nmien = value & (int(NMIBits.DLI) | int(NMIBits.VBI))
+            newly_enabled = self.nmien & ~previous_nmien
+            if self.nmist & newly_enabled:
+                self._nmi_asserted = True
         elif register == ANTICRegister.NMIST:
             self.nmist = 0
         else:
@@ -158,6 +166,11 @@ class ANTIC:
         requested = self.wsync_requested
         self.wsync_requested = False
         return requested
+
+    def consume_nmi(self) -> bool:
+        asserted = self._nmi_asserted
+        self._nmi_asserted = False
+        return asserted
 
     def fetch_next_display_list_line(self) -> DisplayListLine:
         instruction_address = self.display_list_pc & 0xFFFF
@@ -214,6 +227,7 @@ class ANTIC:
         return line
 
     def step_scanline(self, *, trigger_nmi: bool = True) -> DisplayListLine | None:
+        triggered_events: list[str] = []
         if self.current_line_remaining <= 0:
             if self.dmactl & DL_DMA:
                 self.current_line = self.fetch_next_display_list_line()
@@ -225,14 +239,17 @@ class ANTIC:
         active_line = self.current_line
         self.current_line_remaining -= 1
         if self.current_line_remaining == 0 and active_line and active_line.dli:
-            self._set_nmist(NMIBits.DLI, trigger_nmi=trigger_nmi)
+            if self._set_nmist(NMIBits.DLI, trigger_nmi=trigger_nmi):
+                triggered_events.append("dli")
 
         self.scanline = (self.scanline + 1) % SCANLINES_PER_FRAME
         if self.scanline == VBLANK_START_SCANLINE:
-            self._set_nmist(NMIBits.VBI, trigger_nmi=trigger_nmi)
+            if self._set_nmist(NMIBits.VBI, trigger_nmi=trigger_nmi):
+                triggered_events.append("vbi")
         if self.scanline == 0:
             self.current_line = None
             self.current_line_remaining = 0
+        self._last_triggered_events = triggered_events
         return active_line
 
     def _advance_scanline(self, *, trigger_nmi: bool) -> list[str]:
@@ -240,14 +257,18 @@ class ANTIC:
         events: list[str] = []
         if line is not None:
             events.append("scanline")
-        if self.nmist & self.nmien & int(NMIBits.DLI):
-            events.append("dli")
-        if self.nmist & self.nmien & int(NMIBits.VBI):
-            events.append("vbi")
+        events.extend(self._last_triggered_events)
         return events
 
-    def _set_nmist(self, bit: NMIBits, *, trigger_nmi: bool) -> None:
-        self.nmist |= int(bit)
+    def _set_nmist(self, bit: NMIBits, *, trigger_nmi: bool) -> bool:
+        del trigger_nmi
+        bit_mask = int(bit)
+        was_set = bool(self.nmist & bit_mask)
+        self.nmist |= bit_mask
+        triggered = not was_set and bool(self.nmien & bit_mask)
+        if triggered:
+            self._nmi_asserted = True
+        return triggered
 
     def _normalize(self, address: int) -> int:
         return ANTIC_MIRROR_BASE + ((address - ANTIC_MIRROR_BASE) & ANTIC_MIRROR_MASK)

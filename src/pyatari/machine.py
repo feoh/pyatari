@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 
 from pyatari.constants import (
@@ -15,7 +14,11 @@ from pyatari.constants import (
     IRQBits,
     JoystickBits,
     ShadowRegister,
-    SCANLINES_PER_FRAME,
+    SIO_COMMAND_FRAME_SIZE,
+    SIO_ERROR_NO_DEVICE,
+    SIOCommand,
+    SIOResponse,
+    SIOWorkspace,
 )
 
 from pyatari.antic import ANTIC
@@ -81,8 +84,6 @@ OS_DEFAULT_RAMTOP_PAGE = 0xA0
 DEMO_COLUMNS = 40
 DEMO_ROWS = 24
 DEMO_MODE_2_INSTRUCTION = 0x02
-BOOT_BASIC = "basic"
-BOOT_MEMO_PAD = "memo_pad"
 SCREEN_CODE_SPACE = 0x00
 OS_RESET_CHECKSUM_GATE = 0xC3AB
 OS_COLDSTART_STATUS = 0x0001
@@ -119,12 +120,6 @@ class MachineStatus:
 
 
 @dataclass(slots=True)
-class BootProgramLine:
-    number: int
-    text: str
-
-
-@dataclass(slots=True)
 class Machine:
     """Own the major emulator subsystems and drive execution."""
 
@@ -141,15 +136,8 @@ class Machine:
     cassette: CassetteDeck = field(default_factory=CassetteDeck)
     printer: PrinterDevice = field(default_factory=PrinterDevice)
     turbo: bool = False
-    boot_mode: str | None = None
-    boot_input_row: int = 0
-    boot_input_col: int = 0
-    boot_input_buffer: str = ""
-    boot_output_row: int = 0
-    boot_cursor_visible: bool = True
-    boot_program: dict[int, BootProgramLine] = field(default_factory=dict)
-    boot_running: bool = False
-    boot_next_line: int | None = None
+    sio_command_frame: bytearray = field(default_factory=bytearray)
+    sio_output_index: int = 0
 
     def __post_init__(self) -> None:
         self.cpu = CPU(memory=self.memory)
@@ -169,15 +157,8 @@ class Machine:
         self.pokey.reset()
         self.cpu.reset()
         self._initialize_os_shadows()
-        self.boot_mode = None
-        self.boot_input_row = 0
-        self.boot_input_col = 0
-        self.boot_input_buffer = ""
-        self.boot_output_row = 0
-        self.boot_cursor_visible = True
-        self.boot_program.clear()
-        self.boot_running = False
-        self.boot_next_line = None
+        self.sio_command_frame.clear()
+        self.sio_output_index = 0
 
     def continue_without_self_test(self, *, max_steps: int = 800_000) -> bool:
         """Advance real ROM boot to the post-checksum branch when self-test ROM is absent.
@@ -203,7 +184,7 @@ class Machine:
                 events = self.antic.tick(remaining)
                 if self.pokey.tick(remaining):
                     self.cpu.irq()
-                if "dli" in events or "vbi" in events:
+                if self.antic.consume_nmi() or "dli" in events or "vbi" in events:
                     self.cpu.nmi()
 
         before = self.cpu.cycles
@@ -213,9 +194,10 @@ class Machine:
         events = self.antic.tick(elapsed)
         if self.pokey.tick(elapsed):
             self.cpu.irq()
+        self._service_serial_bus()
         if self.antic.scanline == 248:
             self._sync_os_shadows_to_hardware()
-        if "dli" in events or "vbi" in events:
+        if self.antic.consume_nmi() or "dli" in events or "vbi" in events:
             self.cpu.nmi()
         self._render_visible_scanlines()
         return opcode
@@ -240,8 +222,6 @@ class Machine:
         raise TimeoutError(msg)
 
     def run_frame(self, *, queue_audio: bool = True, audio_samples: int | None = None) -> int:
-        if self.boot_mode is not None:
-            return self._run_boot_frame(queue_audio=queue_audio, audio_samples=audio_samples)
         target_cycles = self.clock.total_cycles + CYCLES_PER_FRAME
         steps = 0
         while self.clock.total_cycles < target_cycles:
@@ -253,7 +233,6 @@ class Machine:
         return steps
 
     def load_xex(self, xex: bytes | XEXImage) -> XEXImage:
-        self._deactivate_boot_mode()
         image = xex if isinstance(xex, XEXImage) else XEXImage.from_bytes(xex)
         image.load_into(self.memory)
         if image.run_address is not None:
@@ -284,7 +263,6 @@ class Machine:
         return self.run_until(image.run_address, max_steps=max_steps)
 
     def run_program(self, program: bytes, *, start: int = 0x2000, steps: int = 1) -> int:
-        self._deactivate_boot_mode()
         self.memory.load_ram(start, program)
         self.memory.write_word(0xFFFC, start)
         self.reset()
@@ -294,7 +272,6 @@ class Machine:
 
     def load_demo_screen(self) -> None:
         """Install a small ROM-free text demo so the frontend has visible output."""
-        self._deactivate_boot_mode()
         self._install_text_display(chbase_high=DEMO_CHARSET_ADDRESS >> 8)
         screen = self._blank_screen()
         self._write_demo_text(screen, row=8, text="PYATARI 800XL")
@@ -305,19 +282,6 @@ class Machine:
             glyph_address = DEMO_CHARSET_ADDRESS + (self._screen_code_for_char(char) * 8)
             self.memory.load_ram(glyph_address, bytes(glyph))
         self._set_text_colors(bg=0x00, pf0=0x24, pf1=0x0E, pf2=0x58, pf3=0xC6)
-
-    def load_basic_screen(self) -> None:
-        self._activate_boot_mode(BOOT_BASIC)
-        self._render_basic_home()
-
-    def load_memo_pad_screen(self) -> None:
-        self._activate_boot_mode(BOOT_MEMO_PAD)
-        screen = self._blank_screen()
-        self._write_demo_text(screen, row=0, text="MEMO PAD")
-        self._write_demo_text(screen, row=2, text="TYPE NOTES HERE")
-        self._write_screen(screen)
-        self._set_boot_input(row=4, col=0)
-        self.boot_output_row = 5
 
     def has_visible_output(self) -> bool:
         """Return True when the current framebuffer contains any non-background pixels."""
@@ -335,8 +299,6 @@ class Machine:
         keycode = KEYCODE_MAP.get(normalized)
         if keycode is not None:
             self.pokey.press_key(keycode)
-        if self.boot_mode is not None:
-            self._boot_handle_key(normalized)
 
     def release_key(self) -> None:
         self.pokey.release_key()
@@ -347,12 +309,6 @@ class Machine:
         self.gtia.set_console_switch(start=start, select=select, option=option)
 
     def press_reset(self) -> None:
-        if self.boot_mode == BOOT_BASIC:
-            self._render_basic_home()
-            return
-        if self.boot_mode == BOOT_MEMO_PAD:
-            self.load_memo_pad_screen()
-            return
         self.cpu.nmi()
 
     def press_break(self) -> None:
@@ -517,58 +473,44 @@ class Machine:
         self.memory.write_byte(int(GTIAWriteRegister.COLPF3), self.memory.read_byte(int(ShadowRegister.COLOR3)))
         self.memory.write_byte(int(GTIAWriteRegister.COLBK), self.memory.read_byte(int(ShadowRegister.COLOR4)))
 
-    def _run_boot_frame(self, *, queue_audio: bool, audio_samples: int | None) -> int:
-        del audio_samples
-        self.clock.tick(CYCLES_PER_FRAME)
-        self.gtia.clear_framebuffer()
-        self._update_boot_cursor()
-        if self.boot_mode == BOOT_BASIC and self.boot_running:
-            self._basic_step_program()
-        self.antic.scanline = 0
-        self.antic.cycles_into_scanline = 0
-        self.antic.display_list_pc = self.antic.dlist
-        self.antic.screen_memory_address = 0
-        self.antic.current_line = None
-        self.antic.current_line_remaining = 0
-        for _ in range(SCANLINES_PER_FRAME):
-            line = self.antic.step_scanline(trigger_nmi=False)
-            row = self.antic.scanline - 1
-            if line is not None and 0 <= row < self.display.height:
-                self.gtia.render_scanline(
-                    line,
-                    row=row,
-                    antic_chbase=self.antic.chbase,
-                    antic_chactl=self.antic.chactl,
-                    antic_hscrol=self.antic.hscrol,
-                    antic_vscrol=self.antic.vscrol,
-                )
-        if queue_audio:
-            self.audio.queue_from_pokey(self.pokey, self._samples_per_frame())
-        return SCANLINES_PER_FRAME
+    def _service_serial_bus(self) -> None:
+        while self.sio_output_index < len(self.pokey.serial_output_bytes):
+            self.sio_command_frame.append(self.pokey.serial_output_bytes[self.sio_output_index])
+            self.sio_output_index += 1
+            if len(self.sio_command_frame) == SIO_COMMAND_FRAME_SIZE:
+                self._handle_sio_command_frame(bytes(self.sio_command_frame))
+                self.sio_command_frame.clear()
 
-    def _activate_boot_mode(self, mode: str) -> None:
-        self._deactivate_boot_mode()
-        self.boot_mode = mode
-        self.boot_program = {}
-        self.boot_running = False
-        self.boot_next_line = None
-        self._install_text_display(chbase_high=0xE0 if self.memory.os_rom is not None else DEMO_CHARSET_ADDRESS >> 8)
-        if self.memory.os_rom is None:
-            for char, glyph in DEMO_FONT.items():
-                glyph_address = DEMO_CHARSET_ADDRESS + (self._screen_code_for_char(char) * 8)
-                self.memory.load_ram(glyph_address, bytes(glyph))
-        self._set_text_colors(bg=0x00, pf0=0x24, pf1=0x0E, pf2=0x58, pf3=0xC6)
+    def _handle_sio_command_frame(self, frame: bytes) -> None:
+        device_id, command, aux1, aux2, _checksum = frame
+        self.memory.write_byte(int(SIOWorkspace.STATUS), 0x00)
 
-    def _deactivate_boot_mode(self) -> None:
-        self.boot_mode = None
-        self.boot_input_row = 0
-        self.boot_input_col = 0
-        self.boot_input_buffer = ""
-        self.boot_output_row = 0
-        self.boot_cursor_visible = True
-        self.boot_running = False
-        self.boot_next_line = None
-        self.boot_program.clear()
+        try:
+            if command == int(SIOCommand.STATUS):
+                response = self.sio.send_command(device_id, command)
+            elif command == int(SIOCommand.READ_SECTOR):
+                sector = aux1 | (aux2 << 8)
+                response = self.sio.send_command(device_id, command, sector=sector)
+            else:
+                return
+        except KeyError:
+            self.memory.write_byte(int(SIOWorkspace.STATUS), SIO_ERROR_NO_DEVICE)
+            return
+
+        framed_response = self._build_sio_response_frame(response)
+        for byte in framed_response:
+            self.pokey.queue_serial_input(byte)
+
+    def _build_sio_response_frame(self, payload: bytes) -> bytes:
+        checksum = self._sio_checksum(payload)
+        return bytes([int(SIOResponse.ACK), int(SIOResponse.COMPLETE), *payload, checksum])
+
+    def _sio_checksum(self, payload: bytes) -> int:
+        checksum = 0
+        for byte in payload:
+            checksum += byte
+            checksum = (checksum & 0xFF) + (checksum >> 8)
+        return checksum & 0xFF
 
     def _install_text_display(self, *, chbase_high: int) -> None:
         display_list = bytearray([0x70, DEMO_MODE_2_INSTRUCTION | 0x40])
@@ -602,206 +544,6 @@ class Machine:
             self.memory.read_byte(DEMO_SCREEN_ADDRESS + offset)
             for offset in range(DEMO_COLUMNS * DEMO_ROWS)
         )
-
-    def _render_basic_home(self) -> None:
-        screen = self._blank_screen()
-        self._write_demo_text(screen, row=0, text="ATARI BASIC")
-        self._write_demo_text(screen, row=2, text="READY")
-        self._write_screen(screen)
-        self.boot_program.clear()
-        self.boot_running = False
-        self.boot_next_line = None
-        self._set_boot_input(row=4, col=0)
-        self.boot_output_row = 5
-
-    def _set_boot_input(self, *, row: int, col: int) -> None:
-        self.boot_input_row = row
-        self.boot_input_col = col
-        self.boot_input_buffer = ""
-        self.boot_cursor_visible = True
-        self._update_boot_cursor()
-
-    def _boot_handle_key(self, key: str) -> None:
-        if key == "return":
-            self._boot_submit_line()
-            return
-        if key == "space":
-            char = " "
-        elif key == "backspace":
-            self._boot_backspace()
-            return
-        elif len(key) == 1:
-            char = key.upper()
-        else:
-            return
-        if self.boot_input_col >= DEMO_COLUMNS:
-            return
-        self._write_boot_char(char)
-
-    def _write_boot_char(self, char: str) -> None:
-        screen = self._screen_as_bytes()
-        self._clear_cursor(screen)
-        index = (self.boot_input_row * DEMO_COLUMNS) + self.boot_input_col
-        screen[index] = self._screen_code_for_char(char)
-        self.boot_input_buffer += char
-        self.boot_input_col += 1
-        self._write_screen(screen)
-        self._update_boot_cursor()
-
-    def _boot_backspace(self) -> None:
-        if not self.boot_input_buffer or self.boot_input_col <= 0:
-            return
-        screen = self._screen_as_bytes()
-        self._clear_cursor(screen)
-        self.boot_input_col -= 1
-        self.boot_input_buffer = self.boot_input_buffer[:-1]
-        index = (self.boot_input_row * DEMO_COLUMNS) + self.boot_input_col
-        screen[index] = SCREEN_CODE_SPACE
-        self._write_screen(screen)
-        self._update_boot_cursor()
-
-    def _boot_submit_line(self) -> None:
-        line = self.boot_input_buffer.rstrip()
-        if self.boot_mode == BOOT_BASIC:
-            self._basic_submit_line(line)
-        elif self.boot_mode == BOOT_MEMO_PAD:
-            self._memo_submit_line()
-
-    def _memo_submit_line(self) -> None:
-        next_row = min(DEMO_ROWS - 1, self.boot_input_row + 1)
-        if next_row == DEMO_ROWS - 1 and self.boot_input_row == DEMO_ROWS - 1:
-            self._scroll_boot_area(start_row=4)
-            next_row = DEMO_ROWS - 1
-        self._set_boot_input(row=next_row, col=0)
-
-    def _basic_submit_line(self, line: str) -> None:
-        command = line.strip().upper()
-        self.boot_output_row = max(self.boot_output_row, self.boot_input_row + 1)
-        if command:
-            self._basic_execute_input(command)
-        if not self.boot_running:
-            self._basic_write_output("READY")
-            self._set_boot_input(row=min(self.boot_output_row, DEMO_ROWS - 1), col=0)
-
-    def _basic_execute_input(self, command: str) -> None:
-        line_match = re.fullmatch(r"(\d+)\s+(.+)", command)
-        if line_match:
-            line_number = int(line_match.group(1))
-            self.boot_program[line_number] = BootProgramLine(
-                number=line_number,
-                text=line_match.group(2),
-            )
-            return
-        if command == "RUN":
-            self._basic_start_program()
-            return
-        if command == "LIST":
-            self._basic_list_program()
-            return
-        if not self._basic_execute_statement(command):
-            self._basic_write_output("?SYNTAX ERROR")
-
-    def _basic_start_program(self) -> None:
-        if not self.boot_program:
-            self._basic_write_output("READY")
-            return
-        self.boot_running = True
-        self.boot_next_line = min(self.boot_program)
-
-    def _basic_list_program(self) -> None:
-        if not self.boot_program:
-            self._basic_write_output("READY")
-            return
-        for line_number in sorted(self.boot_program):
-            program_line = self.boot_program[line_number]
-            self._basic_write_output(f"{program_line.number} {program_line.text}")
-
-    def _basic_step_program(self) -> None:
-        if not self.boot_running or self.boot_next_line is None:
-            return
-        program_line = self.boot_program.get(self.boot_next_line)
-        if program_line is None:
-            self.boot_running = False
-            self.boot_next_line = None
-            self._basic_write_output("READY")
-            self._set_boot_input(row=min(self.boot_output_row, DEMO_ROWS - 1), col=0)
-            return
-        next_line = self._basic_execute_program_line(program_line.text)
-        if next_line is None:
-            ordered = sorted(number for number in self.boot_program if number > program_line.number)
-            self.boot_next_line = ordered[0] if ordered else None
-            if self.boot_next_line is None:
-                self.boot_running = False
-                self._basic_write_output("READY")
-                self._set_boot_input(row=min(self.boot_output_row, DEMO_ROWS - 1), col=0)
-        else:
-            self.boot_next_line = next_line
-
-    def _basic_execute_program_line(self, statement: str) -> int | None:
-        print_match = re.fullmatch(
-            r'PRINT\s*(?:\(\s*)?"([^"]*)"(?:\s*\))?(?:\s*:\s*GOTO\s+(\d+))?',
-            statement,
-        )
-        if print_match is None:
-            self.boot_running = False
-            self._basic_write_output("?SYNTAX ERROR")
-            return None
-        self._basic_write_output(print_match.group(1))
-        goto_target = print_match.group(2)
-        return int(goto_target) if goto_target is not None else None
-
-    def _basic_execute_statement(self, command: str) -> bool:
-        print_match = re.fullmatch(r'PRINT\s*(?:\(\s*)?"([^"]*)"(?:\s*\))?', command)
-        if print_match is not None:
-            self._basic_write_output(print_match.group(1))
-            return True
-        return False
-
-    def _write_status_line(self, row: int, text: str) -> None:
-        row = min(max(row, 0), DEMO_ROWS - 1)
-        screen = self._screen_as_bytes()
-        start = row * DEMO_COLUMNS
-        screen[start:start + DEMO_COLUMNS] = bytes([SCREEN_CODE_SPACE] * DEMO_COLUMNS)
-        encoded = bytes(self._screen_code_for_char(char) for char in text[:DEMO_COLUMNS])
-        screen[start:start + len(encoded)] = encoded
-        self._write_screen(screen)
-
-    def _basic_write_output(self, text: str) -> None:
-        row = self.boot_output_row
-        if row >= DEMO_ROWS:
-            self._scroll_boot_area(start_row=2)
-            row = DEMO_ROWS - 1
-            self.boot_output_row = row
-        self._write_status_line(row, text)
-        self.boot_output_row = min(row + 1, DEMO_ROWS)
-
-    def _scroll_boot_area(self, *, start_row: int) -> None:
-        screen = self._screen_as_bytes()
-        for row in range(start_row, DEMO_ROWS - 1):
-            dest = row * DEMO_COLUMNS
-            src = (row + 1) * DEMO_COLUMNS
-            screen[dest:dest + DEMO_COLUMNS] = screen[src:src + DEMO_COLUMNS]
-        last_row = (DEMO_ROWS - 1) * DEMO_COLUMNS
-        screen[last_row:last_row + DEMO_COLUMNS] = bytes([SCREEN_CODE_SPACE] * DEMO_COLUMNS)
-        self._write_screen(screen)
-
-    def _update_boot_cursor(self) -> None:
-        if self.boot_mode is None:
-            return
-        screen = self._screen_as_bytes()
-        self._clear_cursor(screen)
-        if self.boot_cursor_visible and self.boot_input_col < DEMO_COLUMNS:
-            index = (self.boot_input_row * DEMO_COLUMNS) + self.boot_input_col
-            screen[index] = SCREEN_CODE_SPACE | 0x80
-        self._write_screen(screen)
-        self.boot_cursor_visible = not self.boot_cursor_visible
-
-    def _clear_cursor(self, screen: bytearray) -> None:
-        if self.boot_input_col >= DEMO_COLUMNS:
-            return
-        index = (self.boot_input_row * DEMO_COLUMNS) + self.boot_input_col
-        if screen[index] & 0x80:
-            screen[index] = SCREEN_CODE_SPACE
 
     def _write_demo_text(self, screen: bytearray, *, row: int, text: str) -> None:
         text = text[:DEMO_COLUMNS]
@@ -841,7 +583,7 @@ def main() -> None:
     parser.add_argument(
         "--real-rom-boot",
         action="store_true",
-        help="bypass the synthetic READY/MEMO PAD shell and run the actual ROM boot path",
+        help="run the actual ROM boot path",
     )
     args = parser.parse_args()
 
@@ -906,18 +648,12 @@ def main() -> None:
             f"{len(image.segments)} segment(s), run address {run_addr}"
         )
 
-    if args.xex is None and not args.real_rom_boot:
-        if os_rom_path.exists() and basic_rom_path.exists():
-            machine.load_basic_screen()
-            print("Loaded BASIC READY boot screen")
-        elif os_rom_path.exists():
-            machine.load_memo_pad_screen()
-            print("Loaded MEMO PAD boot screen")
-        else:
+    if args.xex is None and not os_rom_path.exists():
+        if not args.real_rom_boot:
             machine.load_demo_screen()
             print("Loaded built-in graphics demo (no ROMs or XEX supplied)")
-    elif args.real_rom_boot and args.xex is None:
-        print("Running real ROM boot path (synthetic shell disabled)")
+    elif args.xex is None:
+        print("Running real ROM boot path")
 
     if args.frames is not None:
         for _ in range(args.frames):

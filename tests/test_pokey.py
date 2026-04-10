@@ -63,6 +63,22 @@ def test_serial_output_schedules_need_irq_before_done_irq():
     assert pokey.read_register(int(POKEYReadRegister.IRQST)) & int(IRQBits.SERIAL_OUT_DONE) == 0
 
 
+def test_queue_serial_input_sets_serin_skstat_and_irq():
+    pokey = POKEY(memory=MemoryBus())
+    pokey.write_register(
+        int(POKEYWriteRegister.IRQEN),
+        int(IRQBits.SERIAL_IN_DONE),
+    )
+    pokey.queue_serial_input(0x41, skstat=0x00)
+
+    irq = pokey.tick(CPU_CYCLES_PER_SERIAL_BYTE)
+
+    assert irq is True
+    assert pokey.read_register(int(POKEYReadRegister.SERIN)) == 0x41
+    assert pokey.read_register(int(POKEYReadRegister.SKSTAT)) == 0x00
+    assert pokey.read_register(int(POKEYReadRegister.IRQST)) & int(IRQBits.SERIAL_IN_DONE) == 0
+
+
 def test_random_register_varies_between_reads():
     pokey = POKEY(memory=MemoryBus())
 

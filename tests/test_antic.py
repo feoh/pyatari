@@ -93,6 +93,28 @@ def test_vbi_and_dli_set_nmist_bits():
     assert antic.nmist & NMIBits.VBI
 
 
+def test_vbi_event_only_triggers_once_until_nmist_is_cleared():
+    antic = ANTIC(memory=MemoryBus())
+    antic.nmien = int(NMIBits.VBI)
+    antic.scanline = VBLANK_START_SCANLINE - 1
+
+    first_events = antic.tick(CYCLES_PER_SCANLINE)
+    second_events = antic.tick(CYCLES_PER_SCANLINE)
+
+    assert first_events.count("vbi") == 1
+    assert "vbi" not in second_events
+
+
+def test_enabling_nmien_with_latched_vbi_asserts_nmi_once():
+    antic = ANTIC(memory=MemoryBus())
+    antic.nmist = int(NMIBits.VBI)
+
+    antic.write_register(int(ANTICRegister.NMIEN), int(NMIBits.VBI))
+
+    assert antic.consume_nmi() is True
+    assert antic.consume_nmi() is False
+
+
 def test_wsync_request_is_consumed_by_machine_step():
     machine = Machine()
     machine.memory.write_word(0xFFFC, 0x2000)

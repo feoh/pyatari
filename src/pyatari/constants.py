@@ -497,6 +497,26 @@ class OSVector(IntEnum):
 
 
 # =============================================================================
+# OS SIO Workspace
+# =============================================================================
+
+class SIOWorkspace(IntEnum):
+    """OS RAM workspace used by the serial I/O routines."""
+    DDEVIC = 0x0300   # Device ID (e.g. $31 = D1:)
+    DUNIT = 0x0301    # Unit number
+    DCMND = 0x0302    # Command byte
+    DSTATS = 0x0303   # Direction/status flags
+    DBUFLO = 0x0304   # Data buffer pointer (low)
+    DBUFHI = 0x0305   # Data buffer pointer (high)
+    DTIMLO = 0x0306   # Timeout in 1/60s ticks
+    DBYTLO = 0x0308   # Transfer length (low)
+    DBYTHI = 0x0309   # Transfer length (high)
+    DAUX1 = 0x030A    # Command auxiliary byte 1
+    DAUX2 = 0x030B    # Command auxiliary byte 2
+    STATUS = 0x0317   # SIO completion status used by the OS boot path
+
+
+# =============================================================================
 # Player/Missile (Sprite) Constants
 # =============================================================================
 
@@ -546,9 +566,19 @@ class SIOCommand(IntEnum):
     PUT_SECTOR = 0x50    # 'P' -- Write a sector (no verify)
     FORMAT = 0x21        # '!' -- Format disk
 
+
+class SIOResponse(IntEnum):
+    """Device-to-computer SIO handshake bytes."""
+    ACK = 0x41       # 'A'
+    NAK = 0x4E       # 'N'
+    COMPLETE = 0x43  # 'C'
+    ERROR = 0x45     # 'E'
+
 # Standard sector sizes
 SECTOR_SIZE_SINGLE = 128   # Single density (810 drive)
 SECTOR_SIZE_DOUBLE = 256   # Double density (1050 drive enhanced)
+SIO_COMMAND_FRAME_SIZE = 5
+SIO_ERROR_NO_DEVICE = 0x8A
 
 # SIO OS routine entry point
 SIO_VECTOR = 0xE459

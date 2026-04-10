@@ -157,7 +157,7 @@ Each phase is sized for one Claude session (~2-4 hours). Each produces something
 - **Test without ROMs**: Load and run a raw XEX binary
 
 #### Phase 16A: Replace the Synthetic Shell with Real ROM Boot
-- Remove the synthetic BASIC/MEMO PAD shell as the default success path once the ROMs can drive the screen themselves.
+- Status: complete on 2026-04-10. The synthetic BASIC/MEMO PAD shell has been removed from the runtime path and codebase.
 - Keep a temporary debug-only escape hatch so the real ROM boot path can be exercised even before it is complete.
 - Add ROM boot tracing utilities that report PC, ANTIC registers, and key OS state while stepping through reset.
 

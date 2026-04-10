@@ -9,12 +9,18 @@ from pyatari.constants import (
     CYCLES_PER_FRAME,
     FRAMES_PER_SECOND,
     GTIAWriteRegister,
+    IRQBits,
+    POKEYReadRegister,
+    POKEYWriteRegister,
     RESET_VECTOR,
     ShadowRegister,
+    SIO_ERROR_NO_DEVICE,
+    SIOResponse,
+    SIOWorkspace,
 )
-from pyatari.machine import BOOT_BASIC, BOOT_MEMO_PAD, Machine
+from pyatari.machine import Machine
 from pyatari.rom_loader import create_test_rom_stub
-from pyatari.sio import create_test_xex
+from pyatari.sio import ATRImage, DiskDrive, create_test_atr, create_test_xex
 
 
 def make_machine() -> Machine:
@@ -110,108 +116,6 @@ def test_has_visible_output_detects_demo_frame():
     machine.run_frame(queue_audio=False)
 
     assert machine.has_visible_output() is True
-
-
-def test_load_basic_screen_initializes_ready_prompt():
-    machine = Machine()
-
-    machine.load_basic_screen()
-
-    row0 = read_screen_row(machine, 0)
-    row2 = read_screen_row(machine, 2)
-
-    assert machine.boot_mode == BOOT_BASIC
-    assert "ATARI BASIC" in row0
-    assert "READY" in row2
-
-
-def test_basic_screen_print_command_writes_output_and_ready():
-    machine = Machine()
-    machine.load_basic_screen()
-
-    for key in ['p', 'r', 'i', 'n', 't', 'space', '"', 'h', 'e', 'l', 'l', 'o', '"', 'return']:
-        machine.press_key(key)
-
-    row5 = read_screen_row(machine, 5)
-    row6 = read_screen_row(machine, 6)
-
-    assert "HELLO" in row5
-    assert "READY" in row6
-
-
-def test_basic_screen_accepts_parenthesized_print():
-    machine = Machine()
-    machine.load_basic_screen()
-
-    for key in ['p', 'r', 'i', 'n', 't', '(', '"', 'h', 'e', 'l', 'l', 'o', 'space', 'w', 'o', 'r', 'l', 'd', '!', '"', ')', 'return']:
-        machine.press_key(key)
-
-    row5 = read_screen_row(machine, 5)
-
-    assert "HELLO WORLD!" in row5
-
-
-def test_basic_screen_can_run_print_goto_loop():
-    machine = Machine()
-    machine.load_basic_screen()
-
-    program = ['1', '0', 'space', 'p', 'r', 'i', 'n', 't', 'space', '"', 'h', 'e', 'l', 'l', 'o', '"', 'space', ':', 'space', 'g', 'o', 't', 'o', 'space', '1', '0', 'return']
-    for key in program:
-        machine.press_key(key)
-    for key in ['r', 'u', 'n', 'return']:
-        machine.press_key(key)
-
-    machine.run_frame(queue_audio=False)
-
-    row7 = read_screen_row(machine, 7)
-
-    assert machine.boot_running is True
-    assert "HELLO" in row7
-
-
-def test_basic_screen_preserves_numeric_input_codes():
-    machine = Machine()
-    machine.load_basic_screen()
-
-    for key in ['1', '0', 'space', 'g', 'o', 't', 'o']:
-        machine.press_key(key)
-
-    row4 = read_screen_row(machine, 4)
-
-    assert "10 GOTO" in row4
-
-
-def test_basic_screen_list_displays_program_lines():
-    machine = Machine()
-    machine.load_basic_screen()
-
-    for key in ['1', '0', 'space', 'p', 'r', 'i', 'n', 't', 'space', '"', 'h', 'i', '"', 'return']:
-        machine.press_key(key)
-    for key in ['2', '0', 'space', 'g', 'o', 't', 'o', 'space', '1', '0', 'return']:
-        machine.press_key(key)
-    for key in ['l', 'i', 's', 't', 'return']:
-        machine.press_key(key)
-
-    row9 = read_screen_row(machine, 9)
-    row10 = read_screen_row(machine, 10)
-
-    assert '10 PRINT "HI"' in row9
-    assert "20 GOTO 10" in row10
-
-
-def test_memo_pad_accepts_typed_text():
-    machine = Machine()
-    machine.load_memo_pad_screen()
-
-    for key in ['h', 'i', 'space', 't', 'h', 'e', 'r', 'e', 'return', 'o', 'k']:
-        machine.press_key(key)
-
-    row4 = read_screen_row(machine, 4)
-    row5 = read_screen_row(machine, 5)
-
-    assert machine.boot_mode == BOOT_MEMO_PAD
-    assert "HI THERE" in row4
-    assert "OK" in row5
 
 
 def test_vbi_syncs_os_shadow_registers_to_live_hardware():
@@ -314,6 +218,11 @@ def test_real_rom_boot_message_clarifies_basic_is_enabled_when_option_not_held(
         "argv",
         ["pyatari", "--frames", "1", "--real-rom-boot", "--rom-dir", str(rom_dir)],
     )
+    monkeypatch.setattr(
+        Machine,
+        "continue_without_self_test",
+        lambda self, max_steps=800_000: True,
+    )
 
     machine_module.main()
 
@@ -347,3 +256,45 @@ def test_real_rom_boot_message_reports_post_checksum_fallback(
 
     output = capsys.readouterr().out
     assert "post-checksum warm-start fallback" in output
+
+
+def test_machine_marks_missing_sio_device_probe_as_complete():
+    machine = Machine()
+
+    for byte in (0x31, 0x53, 0x00, 0x00, 0x00):
+        machine.memory.write_byte(int(POKEYWriteRegister.SEROUT), byte)
+    machine._service_serial_bus()
+
+    assert machine.memory.read_byte(int(SIOWorkspace.STATUS)) == SIO_ERROR_NO_DEVICE
+
+
+def test_machine_queues_sio_status_response_bytes_for_attached_drive():
+    machine = Machine()
+    machine.sio.attach_disk(
+        0x31,
+        DiskDrive(image=ATRImage.from_bytes(create_test_atr([b"A" * 128]))),
+    )
+    machine.memory.write_byte(
+        int(POKEYWriteRegister.IRQEN),
+        int(IRQBits.SERIAL_IN_DONE),
+    )
+
+    for byte in (0x31, 0x53, 0x00, 0x00, 0x00):
+        machine.memory.write_byte(int(POKEYWriteRegister.SEROUT), byte)
+    machine._service_serial_bus()
+
+    observed: list[int] = []
+    for _ in range(7):
+        machine.pokey.tick(28 * 10)
+        observed.append(machine.memory.read_byte(int(POKEYReadRegister.SERIN)))
+
+    assert machine.memory.read_byte(int(SIOWorkspace.STATUS)) == 0x00
+    assert observed == [
+        int(SIOResponse.ACK),
+        int(SIOResponse.COMPLETE),
+        0x00,
+        0x01,
+        0x80,
+        0x00,
+        0x81,
+    ]

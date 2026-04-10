@@ -38,6 +38,8 @@ class PokeyAudioChannel:
 class PokeySerialEvent:
     irq_bit: int
     cycles_remaining: int
+    data: int | None = None
+    skstat: int | None = None
 
 
 @dataclass(slots=True)
@@ -60,6 +62,7 @@ class POKEY:
     random_state: int = 0x1FFFF
     serial_events: list[PokeySerialEvent] = field(default_factory=list)
     serial_transfer_active: bool = False
+    serial_output_bytes: list[int] = field(default_factory=list)
 
     def install(self) -> None:
         self.memory.register_read_handler(0xD200, 0xD2FF, self.read_register)
@@ -83,6 +86,7 @@ class POKEY:
         self.random_state = 0x1FFFF
         self.serial_events = []
         self.serial_transfer_active = False
+        self.serial_output_bytes = []
 
     def read_register(self, address: int) -> int:
         register = self._normalize(address)
@@ -141,6 +145,7 @@ class POKEY:
         if register == int(POKEYWriteRegister.SEROUT):
             self.serout = value
             self.serial_transfer_active = True
+            self.serial_output_bytes.append(value)
             self._queue_serial_event(int(IRQBits.SERIAL_OUT_NEED))
             return
         if register == int(POKEYWriteRegister.IRQEN):
@@ -192,6 +197,25 @@ class POKEY:
         self.kbcode = 0xFF
         self.skstat |= int(IRQBits.KEYBOARD)
         self.irqst |= int(IRQBits.KEYBOARD)
+
+    def queue_serial_input(self, data: int, *, skstat: int = 0x00) -> None:
+        delay = CPU_CYCLES_PER_SERIAL_BYTE
+        pending_input = [
+            event.cycles_remaining
+            for event in self.serial_events
+            if event.irq_bit == int(IRQBits.SERIAL_IN_DONE)
+        ]
+        if pending_input:
+            delay = max(pending_input) + CPU_CYCLES_PER_SERIAL_BYTE
+        self.serial_events.append(
+            PokeySerialEvent(
+                irq_bit=int(IRQBits.SERIAL_IN_DONE),
+                cycles_remaining=delay,
+                data=data & 0xFF,
+                skstat=skstat & 0xFF,
+            )
+        )
+        self.irqst |= int(IRQBits.SERIAL_IN_DONE)
 
     def channel_frequency(self, channel: int) -> float:
         base_clock = 15_699.0 if (self.audctl & 0x01) else 63_921.0
@@ -300,6 +324,10 @@ class POKEY:
                 remaining_events.append(event)
                 continue
             if self.irqen & event.irq_bit:
+                if event.data is not None:
+                    self.serin = event.data
+                if event.skstat is not None:
+                    self.skstat = event.skstat
                 self.irqst &= ~event.irq_bit & 0xFF
                 if event.irq_bit == int(IRQBits.SERIAL_OUT_DONE):
                     self.serial_transfer_active = False
