@@ -245,6 +245,19 @@ class IRQBits(IntEnum):
     BREAK_KEY = 0x80        # BREAK key pressed
 
 
+class SKSTATBits(IntEnum):
+    """Bit masks for POKEY SKSTAT status bits."""
+    KEY_DOWN = 0x04   # Active-low: 0 when a key press has been debounced
+    SHIFT = 0x08      # Active-low shift-state indicator
+
+
+class SKCTLBits(IntEnum):
+    """Bit masks for POKEY SKCTL control bits."""
+    KEYBOARD_DEBOUNCE = 0x01
+    KEYBOARD_SCAN = 0x02
+    FAST_POT_SCAN = 0x04
+
+
 # POKEY audio clock dividers
 POKEY_CLOCK_64KHZ = 63_921    # ~64 kHz (CPU_CLOCK / 28)
 POKEY_CLOCK_15KHZ = 15_699    # ~15.7 kHz (CPU_CLOCK / 114)

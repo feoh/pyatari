@@ -64,3 +64,17 @@ def test_machine_installs_pia_handlers():
     machine.memory.write_byte(0xD300, 0xF0)
 
     assert machine.pia.porta_ddr == 0xF0
+
+
+def test_reset_restores_default_portb_banking():
+    machine = Machine()
+
+    machine.memory.write_byte(PIARegister.PORTB, int(PORTBBits.OS_ROM_ENABLE))
+
+    assert machine.memory.portb == int(PORTBBits.OS_ROM_ENABLE)
+
+    machine.reset()
+
+    assert machine.memory.portb == int(
+        PORTBBits.OS_ROM_ENABLE | PORTBBits.BASIC_ROM_ENABLE | PORTBBits.SELF_TEST_ENABLE
+    )

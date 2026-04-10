@@ -34,6 +34,20 @@ class PIA:
         self.memory.register_read_handler(0xD300, 0xD3FF, self.read_register)
         self.memory.register_write_handler(0xD300, 0xD3FF, self.write_register)
 
+    def reset(self) -> None:
+        self.porta_output = 0xFF
+        self.portb_output = int(
+            PORTBBits.OS_ROM_ENABLE
+            | PORTBBits.BASIC_ROM_ENABLE
+            | PORTBBits.SELF_TEST_ENABLE
+        )
+        self.porta_ddr = 0x00
+        self.portb_ddr = 0xFF
+        self.pactl = DDR_ACCESS_BIT
+        self.pbctl = DDR_ACCESS_BIT
+        self.joystick_state = 0xFF
+        self.memory.update_bank_config(self.portb_output)
+
     def read_register(self, address: int) -> int:
         register = self._normalize(address)
         if register == PIARegister.PORTA:

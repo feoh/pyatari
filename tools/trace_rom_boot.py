@@ -42,21 +42,29 @@ def main() -> None:
     if args.post_checksum_fallback:
         machine.continue_without_self_test()
 
+    reset_state = machine.rom_boot_state()
     print(
-        f"reset PC=${machine.cpu.pc:04X} "
-        f"DMACTL=${machine.antic.dmactl:02X} DLIST=${machine.antic.dlist:04X} "
-        f"CHBASE=${machine.antic.chbase:02X}"
+        f"reset PC=${reset_state.pc:04X} frame={reset_state.frame} scanline={reset_state.scanline} "
+        f"PORTB=${reset_state.portb:02X} COLDST=${reset_state.coldstart_status:02X} "
+        f"DMACTL=${reset_state.dmactl:02X}/${reset_state.sdmctl:02X} "
+        f"DLIST=${reset_state.dlist:04X}/${reset_state.sdlstl:04X} "
+        f"CHBASE=${reset_state.chbase:02X}/${reset_state.chbas_shadow:02X} "
+        f"SAVMSC=${reset_state.savmsc:04X} visible={reset_state.visible_output}"
     )
 
     for step in range(1, args.steps + 1):
         machine.step()
         if step % args.stride == 0 or step == args.steps:
+            state = machine.rom_boot_state()
             print(
-                f"{step:>8} PC=${machine.cpu.pc:04X} A={machine.cpu.a:02X} "
+                f"{step:>8} PC=${state.pc:04X} A={machine.cpu.a:02X} "
                 f"X={machine.cpu.x:02X} Y={machine.cpu.y:02X} "
-                f"frame={machine.clock.frame} scanline={machine.clock.scanline} "
-                f"DMACTL=${machine.antic.dmactl:02X} DLIST=${machine.antic.dlist:04X} "
-                f"CHBASE=${machine.antic.chbase:02X}"
+                f"frame={state.frame} scanline={state.scanline} "
+                f"PORTB=${state.portb:02X} COLDST=${state.coldstart_status:02X} "
+                f"DMACTL=${state.dmactl:02X}/${state.sdmctl:02X} "
+                f"DLIST=${state.dlist:04X}/${state.sdlstl:04X} "
+                f"CHBASE=${state.chbase:02X}/${state.chbas_shadow:02X} "
+                f"SAVMSC=${state.savmsc:04X} visible={state.visible_output}"
             )
 
 

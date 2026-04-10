@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from pyatari.constants import AUDCTLBits, IRQBits, POKEYReadRegister, POKEYWriteRegister
+from pyatari.constants import (
+    AUDCTLBits,
+    IRQBits,
+    POKEYReadRegister,
+    POKEYWriteRegister,
+    SKCTLBits,
+    SKSTATBits,
+)
 from pyatari.memory import MemoryBus
 
 DEFAULT_AUDIO_SAMPLE_RATE = 44_100
@@ -188,14 +195,16 @@ class POKEY:
             int(IRQBits.TIMER1) | int(IRQBits.TIMER2) | int(IRQBits.TIMER4)
         )
 
-    def press_key(self, keycode: int) -> None:
+    def press_key(self, keycode: int) -> bool:
+        if not self.skctl & int(SKCTLBits.KEYBOARD_SCAN):
+            return False
         self.kbcode = keycode & 0xFF
-        self.skstat &= ~int(IRQBits.KEYBOARD) & 0xFF
+        self.skstat &= ~int(SKSTATBits.KEY_DOWN) & 0xFF
         self.irqst &= ~int(IRQBits.KEYBOARD) & 0xFF
+        return bool(self.irqen & int(IRQBits.KEYBOARD))
 
     def release_key(self) -> None:
-        self.kbcode = 0xFF
-        self.skstat |= int(IRQBits.KEYBOARD)
+        self.skstat |= int(SKSTATBits.KEY_DOWN)
         self.irqst |= int(IRQBits.KEYBOARD)
 
     def queue_serial_input(self, data: int, *, skstat: int = 0x00) -> None:
@@ -334,6 +343,11 @@ class POKEY:
                 irq_triggered = True
             else:
                 self.irqst |= event.irq_bit
+                # Keep matured serial events latched until software enables the
+                # relevant IRQ source; the ROM can enable serial IRQs after the
+                # byte has already finished shifting.
+                event.cycles_remaining = 0
+                remaining_events.append(event)
         self.serial_events = remaining_events
         return irq_triggered
 

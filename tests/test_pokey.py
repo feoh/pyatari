@@ -3,7 +3,15 @@
 from __future__ import annotations
 
 from pyatari.audio import AudioOutput
-from pyatari.constants import AUDCTLBits, IRQBits, POKEYReadRegister, POKEYWriteRegister, RESET_VECTOR
+from pyatari.constants import (
+    AUDCTLBits,
+    IRQBits,
+    POKEYReadRegister,
+    POKEYWriteRegister,
+    RESET_VECTOR,
+    SKCTLBits,
+    SKSTATBits,
+)
 from pyatari.machine import Machine
 from pyatari.memory import MemoryBus
 from pyatari.pokey import (
@@ -28,14 +36,41 @@ def test_timer_countdown_sets_irq_status_when_enabled():
 
 def test_keyboard_code_and_irq_state_changes_on_press_and_release():
     pokey = POKEY(memory=MemoryBus())
+    pokey.write_register(
+        int(POKEYWriteRegister.SKCTL),
+        int(SKCTLBits.KEYBOARD_SCAN | SKCTLBits.KEYBOARD_DEBOUNCE),
+    )
 
-    pokey.press_key(0x3F)
+    assert pokey.press_key(0x3F) is False
     assert pokey.read_register(int(POKEYReadRegister.KBCODE)) == 0x3F
     assert pokey.read_register(int(POKEYReadRegister.IRQST)) & int(IRQBits.KEYBOARD) == 0
+    assert pokey.read_register(int(POKEYReadRegister.SKSTAT)) & int(SKSTATBits.KEY_DOWN) == 0
 
     pokey.release_key()
+    assert pokey.read_register(int(POKEYReadRegister.KBCODE)) == 0x3F
+    assert pokey.read_register(int(POKEYReadRegister.IRQST)) & int(IRQBits.KEYBOARD)
+    assert pokey.read_register(int(POKEYReadRegister.SKSTAT)) & int(SKSTATBits.KEY_DOWN)
+
+
+def test_keyboard_scan_must_be_enabled_to_report_keypress():
+    pokey = POKEY(memory=MemoryBus())
+    pokey.write_register(int(POKEYWriteRegister.IRQEN), int(IRQBits.KEYBOARD))
+
+    assert pokey.press_key(0x3F) is False
     assert pokey.read_register(int(POKEYReadRegister.KBCODE)) == 0xFF
     assert pokey.read_register(int(POKEYReadRegister.IRQST)) & int(IRQBits.KEYBOARD)
+    assert pokey.read_register(int(POKEYReadRegister.SKSTAT)) & int(SKSTATBits.KEY_DOWN)
+
+
+def test_keyboard_press_requests_irq_when_enabled():
+    pokey = POKEY(memory=MemoryBus())
+    pokey.write_register(
+        int(POKEYWriteRegister.SKCTL),
+        int(SKCTLBits.KEYBOARD_SCAN | SKCTLBits.KEYBOARD_DEBOUNCE),
+    )
+    pokey.write_register(int(POKEYWriteRegister.IRQEN), int(IRQBits.KEYBOARD))
+
+    assert pokey.press_key(0x3F) is True
 
 
 def test_serial_output_schedules_need_irq_before_done_irq():
@@ -77,6 +112,30 @@ def test_queue_serial_input_sets_serin_skstat_and_irq():
     assert pokey.read_register(int(POKEYReadRegister.SERIN)) == 0x41
     assert pokey.read_register(int(POKEYReadRegister.SKSTAT)) == 0x00
     assert pokey.read_register(int(POKEYReadRegister.IRQST)) & int(IRQBits.SERIAL_IN_DONE) == 0
+
+
+def test_serial_input_event_latches_until_irq_is_enabled():
+    pokey = POKEY(memory=MemoryBus())
+    pokey.queue_serial_input(0x41, skstat=0x00)
+
+    irq = pokey.tick(CPU_CYCLES_PER_SERIAL_BYTE)
+
+    assert irq is False
+    assert len(pokey.serial_events) == 1
+    assert pokey.read_register(int(POKEYReadRegister.SERIN)) == 0x00
+    assert pokey.read_register(int(POKEYReadRegister.IRQST)) & int(IRQBits.SERIAL_IN_DONE)
+
+    pokey.write_register(
+        int(POKEYWriteRegister.IRQEN),
+        int(IRQBits.SERIAL_IN_DONE),
+    )
+    irq = pokey.tick(1)
+
+    assert irq is True
+    assert pokey.read_register(int(POKEYReadRegister.SERIN)) == 0x41
+    assert pokey.read_register(int(POKEYReadRegister.SKSTAT)) == 0x00
+    assert pokey.read_register(int(POKEYReadRegister.IRQST)) & int(IRQBits.SERIAL_IN_DONE) == 0
+    assert pokey.serial_events == []
 
 
 def test_random_register_varies_between_reads():

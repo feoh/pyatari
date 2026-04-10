@@ -15,7 +15,9 @@ from pyatari.constants import (
     RESET_VECTOR,
     ShadowRegister,
     SIO_ERROR_NO_DEVICE,
+    SIOCommand,
     SIOResponse,
+    SIO_VECTOR,
     SIOWorkspace,
 )
 from pyatari.machine import Machine
@@ -160,6 +162,18 @@ def test_reset_with_os_rom_seeds_display_shadow_defaults():
     assert machine.memory.read_byte(int(ShadowRegister.CHBAS)) == 0xE0
 
 
+def test_reset_with_os_rom_syncs_seeded_display_defaults_to_hardware():
+    machine = Machine()
+    machine.memory.load_os_rom(create_test_rom_stub(0x4000))
+    machine.reset()
+
+    assert machine.antic.dmactl == 0x22
+    assert machine.antic.dlist == 0x9C20
+    assert machine.antic.chactl == 0x02
+    assert machine.antic.chbase == 0xE0
+    assert machine.gtia.write_registers[int(GTIAWriteRegister.COLBK)] == 0x00
+
+
 def test_reset_with_os_rom_installs_default_display_list_ram():
     machine = Machine()
     machine.memory.load_os_rom(create_test_rom_stub(0x4000))
@@ -201,6 +215,25 @@ def test_continue_without_self_test_is_noop_when_self_test_rom_is_loaded():
 
     assert machine.continue_without_self_test() is False
     assert machine.memory.read_byte(0x0001) == 0x00
+
+
+def test_rom_boot_state_reports_reset_visible_registers():
+    machine = Machine()
+    machine.memory.load_os_rom(create_test_rom_stub(0x4000))
+    machine.reset()
+
+    state = machine.rom_boot_state()
+
+    assert state.pc == machine.cpu.pc
+    assert state.portb == machine.memory.portb
+    assert state.coldstart_status == machine.memory.read_byte(0x0001)
+    assert state.dmactl == 0x22
+    assert state.dlist == 0x9C20
+    assert state.chbase == 0xE0
+    assert state.sdmctl == 0x22
+    assert state.sdlstl == 0x9C20
+    assert state.chbas_shadow == 0xE0
+    assert state.savmsc == 0x9C40
 
 
 def test_real_rom_boot_message_clarifies_basic_is_enabled_when_option_not_held(
@@ -258,14 +291,16 @@ def test_real_rom_boot_message_reports_post_checksum_fallback(
     assert "post-checksum warm-start fallback" in output
 
 
-def test_machine_marks_missing_sio_device_probe_as_complete():
+def test_machine_leaves_missing_sio_device_probe_silent():
     machine = Machine()
+    machine.memory.write_byte(int(SIOWorkspace.STATUS), 0x55)
 
     for byte in (0x31, 0x53, 0x00, 0x00, 0x00):
         machine.memory.write_byte(int(POKEYWriteRegister.SEROUT), byte)
     machine._service_serial_bus()
 
-    assert machine.memory.read_byte(int(SIOWorkspace.STATUS)) == SIO_ERROR_NO_DEVICE
+    assert machine.memory.read_byte(int(SIOWorkspace.STATUS)) == 0x55
+    assert all(event.data is None for event in machine.pokey.serial_events)
 
 
 def test_machine_queues_sio_status_response_bytes_for_attached_drive():
@@ -298,3 +333,55 @@ def test_machine_queues_sio_status_response_bytes_for_attached_drive():
         0x00,
         0x81,
     ]
+
+
+def test_os_siov_trap_returns_no_device_error_to_caller():
+    machine = Machine()
+    machine.cpu.pc = SIO_VECTOR
+    machine.cpu.sp = 0xFB
+    machine.memory.write_byte(0x01FC, 0x02)
+    machine.memory.write_byte(0x01FD, 0x20)
+    machine.memory.write_byte(int(SIOWorkspace.DDEVIC), 0x31)
+    machine.memory.write_byte(int(SIOWorkspace.DCMND), int(SIOCommand.STATUS))
+    machine.memory.write_word(int(SIOWorkspace.DBUFLO), 0x02EA)
+    machine.memory.write_word(int(SIOWorkspace.DBYTLO), 4)
+
+    opcode = machine.step()
+
+    assert opcode.mnemonic == "RTS"
+    assert machine.cpu.pc == 0x2003
+    assert machine.cpu.a == SIO_ERROR_NO_DEVICE
+    assert machine.cpu.y == SIO_ERROR_NO_DEVICE
+    assert machine.cpu.status.carry is True
+    assert machine.memory.read_byte(int(SIOWorkspace.DSTATS)) == SIO_ERROR_NO_DEVICE
+    assert machine.memory.read_byte(int(SIOWorkspace.STATUS)) == SIO_ERROR_NO_DEVICE
+
+
+def test_os_siov_trap_copies_attached_drive_status_frame_to_buffer():
+    machine = Machine()
+    machine.sio.attach_disk(
+        0x31,
+        DiskDrive(image=ATRImage.from_bytes(create_test_atr([b"A" * 128]))),
+    )
+    machine.cpu.pc = SIO_VECTOR
+    machine.cpu.sp = 0xFB
+    machine.memory.write_byte(0x01FC, 0x02)
+    machine.memory.write_byte(0x01FD, 0x20)
+    machine.memory.write_byte(int(SIOWorkspace.DDEVIC), 0x31)
+    machine.memory.write_byte(int(SIOWorkspace.DCMND), int(SIOCommand.STATUS))
+    machine.memory.write_word(int(SIOWorkspace.DBUFLO), 0x02EA)
+    machine.memory.write_word(int(SIOWorkspace.DBYTLO), 4)
+
+    opcode = machine.step()
+
+    assert opcode.mnemonic == "RTS"
+    assert machine.cpu.pc == 0x2003
+    assert machine.cpu.a == 0x01
+    assert machine.cpu.y == 0x01
+    assert machine.cpu.status.carry is False
+    assert machine.memory.read_byte(int(SIOWorkspace.DSTATS)) == 0x01
+    assert machine.memory.read_byte(int(SIOWorkspace.STATUS)) == 0x01
+    assert [
+        machine.memory.read_byte(0x02EA + offset)
+        for offset in range(4)
+    ] == [0x00, 0x01, 0x80, 0x00]

@@ -18,6 +18,7 @@ from pyatari.constants import (
     SIO_ERROR_NO_DEVICE,
     SIOCommand,
     SIOResponse,
+    SIO_VECTOR,
     SIOWorkspace,
 )
 
@@ -28,6 +29,7 @@ from pyatari.cpu import CPU, Opcode
 from pyatari.display import DisplaySurface
 from pyatari.gtia import GTIA
 from pyatari.memory import MemoryBus
+from pyatari.opcodes import OPCODES
 from pyatari.peripherals import CassetteDeck, PrinterDevice
 from pyatari.pia import PIA
 from pyatari.pokey import DEFAULT_AUDIO_SAMPLE_RATE, POKEY
@@ -120,6 +122,23 @@ class MachineStatus:
 
 
 @dataclass(slots=True)
+class ROMBootState:
+    pc: int
+    frame: int
+    scanline: int
+    portb: int
+    coldstart_status: int
+    dmactl: int
+    dlist: int
+    chbase: int
+    sdmctl: int
+    sdlstl: int
+    chbas_shadow: int
+    savmsc: int
+    visible_output: bool
+
+
+@dataclass(slots=True)
 class Machine:
     """Own the major emulator subsystems and drive execution."""
 
@@ -152,11 +171,13 @@ class Machine:
 
     def reset(self) -> None:
         self.clock.reset()
+        self.pia.reset()
         self.antic.reset()
         self.gtia.reset()
         self.pokey.reset()
         self.cpu.reset()
         self._initialize_os_shadows()
+        self._sync_os_shadows_to_hardware()
         self.sio_command_frame.clear()
         self.sio_output_index = 0
 
@@ -177,6 +198,10 @@ class Machine:
         return True
 
     def step(self) -> Opcode:
+        intercepted_opcode = self._intercept_os_siov()
+        if intercepted_opcode is not None:
+            return intercepted_opcode
+
         if self.antic.consume_wsync():
             remaining = (-self.antic.cycles_into_scanline) % CYCLES_PER_SCANLINE
             if remaining:
@@ -255,6 +280,23 @@ class Machine:
             total_cycles=self.clock.total_cycles,
         )
 
+    def rom_boot_state(self) -> ROMBootState:
+        return ROMBootState(
+            pc=self.cpu.pc,
+            frame=self.clock.frame,
+            scanline=self.clock.scanline,
+            portb=self.memory.portb,
+            coldstart_status=self.memory.read_byte(OS_COLDSTART_STATUS),
+            dmactl=self.antic.dmactl,
+            dlist=self.antic.dlist,
+            chbase=self.antic.chbase,
+            sdmctl=self.memory.read_byte(int(ShadowRegister.SDMCTL)),
+            sdlstl=self.memory.read_word(int(ShadowRegister.SDLSTL)),
+            chbas_shadow=self.memory.read_byte(int(ShadowRegister.CHBAS)),
+            savmsc=self.memory.read_word(int(ShadowRegister.SAVMSC)),
+            visible_output=self.has_visible_output(),
+        )
+
     def boot_xex(self, xex: bytes | XEXImage, *, max_steps: int = 100_000) -> int:
         image = self.load_xex(xex)
         if image.run_address is None:
@@ -297,8 +339,8 @@ class Machine:
     def press_key(self, key: str) -> None:
         normalized = key.lower()
         keycode = KEYCODE_MAP.get(normalized)
-        if keycode is not None:
-            self.pokey.press_key(keycode)
+        if keycode is not None and self.pokey.press_key(keycode):
+            self.cpu.irq()
 
     def release_key(self) -> None:
         self.pokey.release_key()
@@ -483,7 +525,6 @@ class Machine:
 
     def _handle_sio_command_frame(self, frame: bytes) -> None:
         device_id, command, aux1, aux2, _checksum = frame
-        self.memory.write_byte(int(SIOWorkspace.STATUS), 0x00)
 
         try:
             if command == int(SIOCommand.STATUS):
@@ -494,9 +535,11 @@ class Machine:
             else:
                 return
         except KeyError:
-            self.memory.write_byte(int(SIOWorkspace.STATUS), SIO_ERROR_NO_DEVICE)
+            # Per Altirra's SIO protocol documentation, a device not addressed on
+            # the bus simply ignores the command; the host must timeout and retry.
             return
 
+        self.memory.write_byte(int(SIOWorkspace.STATUS), 0x00)
         framed_response = self._build_sio_response_frame(response)
         for byte in framed_response:
             self.pokey.queue_serial_input(byte)
@@ -511,6 +554,54 @@ class Machine:
             checksum += byte
             checksum = (checksum & 0xFF) + (checksum >> 8)
         return checksum & 0xFF
+
+    def _intercept_os_siov(self) -> Opcode | None:
+        if self.cpu.pc != SIO_VECTOR:
+            return None
+
+        payload = b""
+        status = 0x01
+        device_id = self.memory.read_byte(int(SIOWorkspace.DDEVIC))
+        command = self.memory.read_byte(int(SIOWorkspace.DCMND))
+        buffer_address = self.memory.read_word(int(SIOWorkspace.DBUFLO))
+        transfer_length = self.memory.read_word(int(SIOWorkspace.DBYTLO))
+        sector = self.memory.read_word(int(SIOWorkspace.DAUX1))
+
+        try:
+            if command == int(SIOCommand.STATUS):
+                payload = self.sio.send_command(device_id, command)
+            elif command == int(SIOCommand.READ_SECTOR):
+                payload = self.sio.send_command(device_id, command, sector=sector)
+            else:
+                status = SIO_ERROR_NO_DEVICE
+        except KeyError:
+            status = SIO_ERROR_NO_DEVICE
+
+        if payload and transfer_length:
+            self.memory.load_ram(buffer_address, payload[:transfer_length])
+
+        self.memory.write_byte(int(SIOWorkspace.DSTATS), status)
+        self.memory.write_byte(int(SIOWorkspace.STATUS), status)
+        self.cpu.a = status
+        self.cpu.y = status
+        self.cpu.status.carry = status != 0x01
+        self.cpu.status.zero = status == 0
+        self.cpu.status.negative = bool(status & 0x80)
+        self.cpu.pc = (self.cpu._pop_word() + 1) & 0xFFFF
+
+        intercepted_opcode = OPCODES[0x60]
+        self.cpu.last_opcode = intercepted_opcode
+        self.cpu.cycles += intercepted_opcode.cycles
+        self.clock.tick_instruction(intercepted_opcode.cycles)
+        events = self.antic.tick(intercepted_opcode.cycles)
+        if self.pokey.tick(intercepted_opcode.cycles):
+            self.cpu.irq()
+        if self.antic.scanline == 248:
+            self._sync_os_shadows_to_hardware()
+        if self.antic.consume_nmi() or "dli" in events or "vbi" in events:
+            self.cpu.nmi()
+        self._render_visible_scanlines()
+        return intercepted_opcode
 
     def _install_text_display(self, *, chbase_high: int) -> None:
         display_list = bytearray([0x70, DEMO_MODE_2_INSTRUCTION | 0x40])

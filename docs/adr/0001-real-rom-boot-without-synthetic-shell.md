@@ -68,3 +68,48 @@ Related consequences of this decision:
 - When temporary diagnostics are needed, they should be trace tools, debug
   switches, or narrowly scoped instrumentation, not alternate fake machine
   behavior.
+
+## 2026-04-10 Follow-Up Notes
+
+After shell removal, the next ROM-boot blockers turned out to be machine reset
+state and SIO behavior rather than display setup alone.
+
+This session recorded and implemented these follow-up decisions:
+
+- `Machine.reset()` must restore PIA banking and immediately sync seeded OS
+  display shadows into live ANTIC/GTIA state so ROM boot starts from a coherent
+  XL-visible reset state.
+- The low-level SIO bus path must not synthesize an immediate "no device"
+  response for an absent drive. Per the Altirra Hardware Reference Manual,
+  an unaddressed or absent peripheral ignores the command and forces a host-side
+  timeout/retry path instead.
+- A high-level `SIOV` fast path is acceptable as a temporary educational aid
+  while low-level serial timeout behavior is still incomplete, as long as it
+  returns OS-visible results that match the ROM's expectations and does not
+  hide the remaining hardware gaps.
+
+Relevant Altirra guidance used for this session:
+
+- SIO peripherals ignore commands not meant for them or with invalid framing,
+  rather than replying with a synthetic error.
+- The host only waits briefly for ACK/NAK before retrying.
+- Disk status includes timeout information that the stock OS uses for command
+  retry behavior.
+
+Observed outcome from these changes:
+
+- Real ROM boot no longer stalls in the previous `$EB18` D1: probe loop when
+  no disk is attached.
+- The ROM path now progresses into the `$F2FD`-`$F312` area and produces the
+  first visible non-black frame during boot tracing.
+- The ROM path reaches the BASIC `READY` prompt and waits in the editor's
+  keyboard polling loop around `$F2FD`-`$F312`.
+- POKEY keyboard state now follows the Altirra-described scan contract more
+  closely for the emulator's current level of detail: `SKCTL` bit 1 gates
+  keyboard scanning, debounced key-down state clears `SKSTAT` bit 2, `KBCODE`
+  remains latched after release, and a key press asserts the keyboard IRQ when
+  `IRQEN` enables it.
+
+This keeps the project aligned with the original decision in this ADR:
+temporary help for incomplete ROM boot should come from targeted diagnostics and
+narrow compatibility shims, not from restoring a fake shell runtime.

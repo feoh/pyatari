@@ -19,6 +19,8 @@ from pyatari.constants import (
     POKEYWriteRegister,
     RESET_VECTOR,
     SCANLINES_PER_FRAME,
+    SKCTLBits,
+    SKSTATBits,
 )
 
 
@@ -79,6 +81,13 @@ class TestPOKEYRegisters:
         assert IRQBits.TIMER1 == 0x01
         assert IRQBits.KEYBOARD == 0x40
         assert IRQBits.BREAK_KEY == 0x80
+
+    def test_keyboard_status_and_control_bits(self):
+        assert SKSTATBits.KEY_DOWN == 0x04
+        assert SKSTATBits.SHIFT == 0x08
+        assert SKCTLBits.KEYBOARD_DEBOUNCE == 0x01
+        assert SKCTLBits.KEYBOARD_SCAN == 0x02
+        assert SKCTLBits.FAST_POT_SCAN == 0x04
 
     def test_audctl_bits(self):
         assert AUDCTLBits.POLY9 == 0x80

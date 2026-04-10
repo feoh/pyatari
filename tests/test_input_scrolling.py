@@ -1,7 +1,14 @@
 """Tests for Phase 15 input handling and fine scrolling."""
 
 from pyatari.antic import DisplayListLine
-from pyatari.constants import GTIAReadRegister, IRQBits, JoystickBits, RESET_VECTOR
+from pyatari.constants import (
+    GTIAReadRegister,
+    IRQBits,
+    JoystickBits,
+    POKEYWriteRegister,
+    RESET_VECTOR,
+    SKCTLBits,
+)
 from pyatari.gtia import GTIA
 from pyatari.machine import Machine
 
@@ -17,6 +24,10 @@ def make_machine(program: bytes = bytes([0xEA]), start: int = 0x2000) -> Machine
 
 def test_keyboard_mapping_updates_kbcode():
     machine = make_machine()
+    machine.memory.write_byte(
+        int(POKEYWriteRegister.SKCTL),
+        int(SKCTLBits.KEYBOARD_SCAN | SKCTLBits.KEYBOARD_DEBOUNCE),
+    )
 
     machine.press_key("a")
 
@@ -25,7 +36,20 @@ def test_keyboard_mapping_updates_kbcode():
 
     machine.release_key()
 
-    assert machine.pokey.kbcode == 0xFF
+    assert machine.pokey.kbcode == 0x3F
+
+
+def test_keyboard_press_queues_irq_when_pokey_irq_is_enabled():
+    machine = make_machine()
+    machine.memory.write_byte(
+        int(POKEYWriteRegister.SKCTL),
+        int(SKCTLBits.KEYBOARD_SCAN | SKCTLBits.KEYBOARD_DEBOUNCE),
+    )
+    machine.memory.write_byte(int(POKEYWriteRegister.IRQEN), int(IRQBits.KEYBOARD))
+
+    machine.press_key("a")
+
+    assert machine.cpu.irq_pending is True
 
 
 def test_console_switches_are_active_low():
