@@ -7,6 +7,7 @@ from pyatari.constants import AUDCTLBits, IRQBits, POKEYReadRegister, POKEYWrite
 from pyatari.machine import Machine
 from pyatari.memory import MemoryBus
 from pyatari.pokey import (
+    CPU_CYCLES_PER_SERIAL_BYTE,
     CPU_CYCLES_PER_POKEY_15KHZ_TICK,
     CPU_CYCLES_PER_POKEY_64KHZ_TICK,
     POKEY,
@@ -35,6 +36,31 @@ def test_keyboard_code_and_irq_state_changes_on_press_and_release():
     pokey.release_key()
     assert pokey.read_register(int(POKEYReadRegister.KBCODE)) == 0xFF
     assert pokey.read_register(int(POKEYReadRegister.IRQST)) & int(IRQBits.KEYBOARD)
+
+
+def test_serial_output_schedules_need_irq_before_done_irq():
+    pokey = POKEY(memory=MemoryBus())
+    pokey.write_register(
+        int(POKEYWriteRegister.IRQEN),
+        int(IRQBits.SERIAL_OUT_NEED),
+    )
+    pokey.write_register(int(POKEYWriteRegister.SEROUT), 0x55)
+
+    irq = pokey.tick(CPU_CYCLES_PER_SERIAL_BYTE)
+
+    assert irq is True
+    irqst = pokey.read_register(int(POKEYReadRegister.IRQST))
+    assert irqst & int(IRQBits.SERIAL_OUT_NEED) == 0
+    assert irqst & int(IRQBits.SERIAL_OUT_DONE)
+
+    pokey.write_register(
+        int(POKEYWriteRegister.IRQEN),
+        int(IRQBits.SERIAL_OUT_DONE),
+    )
+    irq = pokey.tick(CPU_CYCLES_PER_SERIAL_BYTE)
+
+    assert irq is True
+    assert pokey.read_register(int(POKEYReadRegister.IRQST)) & int(IRQBits.SERIAL_OUT_DONE) == 0
 
 
 def test_random_register_varies_between_reads():
@@ -120,3 +146,23 @@ def test_machine_installs_pokey_handlers_and_queues_irq():
 
     assert machine.cpu.irq_pending is True
     assert machine.memory.read_byte(int(POKEYReadRegister.IRQST)) & int(IRQBits.TIMER1) == 0
+
+
+def test_machine_queues_irq_for_serial_output_events():
+    machine = Machine()
+    machine.memory.write_word(RESET_VECTOR, 0x2000)
+    machine.memory.load_ram(0x2000, bytes([0xEA] * 8))
+    machine.reset()
+    machine.cpu.pc = 0x2000
+    machine.memory.write_byte(
+        int(POKEYWriteRegister.IRQEN),
+        int(IRQBits.SERIAL_OUT_NEED | IRQBits.SERIAL_OUT_DONE),
+    )
+    machine.memory.write_byte(int(POKEYWriteRegister.SEROUT), 0x55)
+
+    for _ in range(160):
+        machine.step()
+        if machine.cpu.irq_pending:
+            break
+
+    assert machine.cpu.irq_pending is True

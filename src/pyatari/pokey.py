@@ -10,6 +10,7 @@ from pyatari.memory import MemoryBus
 DEFAULT_AUDIO_SAMPLE_RATE = 44_100
 CPU_CYCLES_PER_POKEY_64KHZ_TICK = 28
 CPU_CYCLES_PER_POKEY_15KHZ_TICK = 114
+CPU_CYCLES_PER_SERIAL_BYTE = CPU_CYCLES_PER_POKEY_64KHZ_TICK * 10
 
 POKEY_MIRROR_BASE = 0xD200
 POKEY_MIRROR_MASK = 0x0F
@@ -34,6 +35,12 @@ class PokeyAudioChannel:
 
 
 @dataclass(slots=True)
+class PokeySerialEvent:
+    irq_bit: int
+    cycles_remaining: int
+
+
+@dataclass(slots=True)
 class POKEY:
     memory: MemoryBus
     audf: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
@@ -51,6 +58,8 @@ class POKEY:
     timers: list[PokeyTimer] = field(default_factory=lambda: [PokeyTimer() for _ in range(4)])
     audio_channels: list[PokeyAudioChannel] = field(default_factory=lambda: [PokeyAudioChannel() for _ in range(4)])
     random_state: int = 0x1FFFF
+    serial_events: list[PokeySerialEvent] = field(default_factory=list)
+    serial_transfer_active: bool = False
 
     def install(self) -> None:
         self.memory.register_read_handler(0xD200, 0xD2FF, self.read_register)
@@ -72,6 +81,8 @@ class POKEY:
         self.timers = [PokeyTimer() for _ in range(4)]
         self.audio_channels = [PokeyAudioChannel() for _ in range(4)]
         self.random_state = 0x1FFFF
+        self.serial_events = []
+        self.serial_transfer_active = False
 
     def read_register(self, address: int) -> int:
         register = self._normalize(address)
@@ -129,10 +140,21 @@ class POKEY:
             return
         if register == int(POKEYWriteRegister.SEROUT):
             self.serout = value
+            self.serial_transfer_active = True
+            self._queue_serial_event(int(IRQBits.SERIAL_OUT_NEED))
             return
         if register == int(POKEYWriteRegister.IRQEN):
+            previous_irqen = self.irqen
             self.irqen = value
             self.irqst |= ~value & 0xFF
+            if (
+                not (previous_irqen & int(IRQBits.SERIAL_OUT_DONE))
+                and (self.irqen & int(IRQBits.SERIAL_OUT_DONE))
+                and self.serial_transfer_active
+                and not self._serial_event_pending(int(IRQBits.SERIAL_OUT_NEED))
+                and not self._serial_event_pending(int(IRQBits.SERIAL_OUT_DONE))
+            ):
+                self._queue_serial_event(int(IRQBits.SERIAL_OUT_DONE))
             return
         if register == int(POKEYWriteRegister.SKCTL):
             self.skctl = value
@@ -148,6 +170,7 @@ class POKEY:
             if timer_ticks == 0:
                 continue
             irq_triggered |= self._advance_timer(channel, timer, timer_ticks)
+        irq_triggered |= self._advance_serial(cycles)
         return irq_triggered
 
     def start_timers(self) -> None:
@@ -252,6 +275,42 @@ class POKEY:
                 self.irqst &= ~irq_bit & 0xFF
                 irq_triggered = True
         return irq_triggered
+
+    def _queue_serial_event(self, irq_bit: int) -> None:
+        self.serial_events = [
+            event for event in self.serial_events if event.irq_bit != irq_bit
+        ]
+        self.serial_events.append(
+            PokeySerialEvent(
+                irq_bit=irq_bit,
+                cycles_remaining=CPU_CYCLES_PER_SERIAL_BYTE,
+            )
+        )
+        self.irqst |= irq_bit
+
+    def _advance_serial(self, cycles: int) -> bool:
+        if not self.serial_events:
+            return False
+
+        irq_triggered = False
+        remaining_events: list[PokeySerialEvent] = []
+        for event in self.serial_events:
+            event.cycles_remaining -= cycles
+            if event.cycles_remaining > 0:
+                remaining_events.append(event)
+                continue
+            if self.irqen & event.irq_bit:
+                self.irqst &= ~event.irq_bit & 0xFF
+                if event.irq_bit == int(IRQBits.SERIAL_OUT_DONE):
+                    self.serial_transfer_active = False
+                irq_triggered = True
+            else:
+                self.irqst |= event.irq_bit
+        self.serial_events = remaining_events
+        return irq_triggered
+
+    def _serial_event_pending(self, irq_bit: int) -> bool:
+        return any(event.irq_bit == irq_bit for event in self.serial_events)
 
     def _next_random_byte(self) -> int:
         bit = ((self.random_state >> 16) ^ (self.random_state >> 11)) & 1

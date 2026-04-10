@@ -14,6 +14,11 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=200_000, help="total CPU steps to execute")
     parser.add_argument("--stride", type=int, default=20_000, help="report state every N steps")
     parser.add_argument(
+        "--post-checksum-fallback",
+        action="store_true",
+        help="continue from the post-checksum warm-start fallback when self-test ROM is unavailable",
+    )
+    parser.add_argument(
         "--rom-dir",
         type=Path,
         default=Path(__file__).resolve().parent.parent / "roms",
@@ -34,6 +39,8 @@ def main() -> None:
     if self_test_rom_path is not None:
         machine.memory.load_self_test_rom(load_self_test_rom(self_test_rom_path).data)
     machine.reset()
+    if args.post_checksum_fallback:
+        machine.continue_without_self_test()
 
     print(
         f"reset PC=${machine.cpu.pc:04X} "

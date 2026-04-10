@@ -84,6 +84,8 @@ DEMO_MODE_2_INSTRUCTION = 0x02
 BOOT_BASIC = "basic"
 BOOT_MEMO_PAD = "memo_pad"
 SCREEN_CODE_SPACE = 0x00
+OS_RESET_CHECKSUM_GATE = 0xC3AB
+OS_COLDSTART_STATUS = 0x0001
 DEMO_FONT: dict[str, tuple[int, ...]] = {
     " ": (0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00),
     "A": (0x18, 0x24, 0x42, 0x7E, 0x42, 0x42, 0x42, 0x00),
@@ -176,6 +178,22 @@ class Machine:
         self.boot_program.clear()
         self.boot_running = False
         self.boot_next_line = None
+
+    def continue_without_self_test(self, *, max_steps: int = 800_000) -> bool:
+        """Advance real ROM boot to the post-checksum branch when self-test ROM is absent.
+
+        XL cold boot verifies the self-test-mapped ROM region before continuing into
+        the normal BASIC/editor startup path. Without a self-test ROM image, that
+        check fails and boot diverts into the self-test branch. This helper keeps the
+        cold-start trace explicit, but lets us continue exercising real OS/BASIC code
+        past the checksum gate until a real self-test ROM is available.
+        """
+        if self.memory.os_rom is None or self.memory.self_test_rom is not None:
+            return False
+
+        self.run_until(OS_RESET_CHECKSUM_GATE, max_steps=max_steps)
+        self.memory.write_byte(OS_COLDSTART_STATUS, 0x01)
+        return True
 
     def step(self) -> Opcode:
         if self.antic.consume_wsync():
@@ -865,6 +883,14 @@ def main() -> None:
         )
 
     machine.reset()
+    if args.real_rom_boot and args.xex is None and basic_rom_path.exists():
+        print("Boot configuration: OPTION not held, so built-in BASIC remains enabled.")
+    if args.real_rom_boot and args.xex is None and machine.memory.self_test_rom is None:
+        if machine.continue_without_self_test():
+            print(
+                "Continuing from post-checksum warm-start fallback because self-test "
+                "ROM is unavailable."
+            )
 
     if args.xex:
         from pathlib import Path

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 from pyatari.constants import (
     ANTICRegister,
     CYCLES_PER_FRAME,
@@ -265,3 +267,83 @@ def test_reset_with_os_rom_installs_default_display_list_ram():
     assert machine.memory.read_byte(0x9C3B) == 0x41
     assert machine.memory.read_word(0x9C3C) == 0x9C20
     assert machine.memory.read_byte(0x9C40) == 0x00
+
+
+def test_continue_without_self_test_marks_checksum_gate_complete(monkeypatch):
+    machine = Machine()
+    machine.memory.load_os_rom(create_test_rom_stub(0x4000))
+    machine.reset()
+
+    def fake_run_until(self, address: int, max_steps: int = 100_000) -> int:
+        assert address == 0xC3AB
+        assert max_steps == 800_000
+        machine.cpu.pc = address
+        return 123
+
+    monkeypatch.setattr(Machine, "run_until", fake_run_until)
+    machine.memory.write_byte(0x0001, 0x00)
+
+    assert machine.continue_without_self_test() is True
+    assert machine.cpu.pc == 0xC3AB
+    assert machine.memory.read_byte(0x0001) == 0x01
+
+
+def test_continue_without_self_test_is_noop_when_self_test_rom_is_loaded():
+    machine = Machine()
+    machine.memory.load_os_rom(create_test_rom_stub(0x4000))
+    machine.memory.load_self_test_rom(create_test_rom_stub(0x0800))
+    machine.reset()
+    machine.memory.write_byte(0x0001, 0x00)
+
+    assert machine.continue_without_self_test() is False
+    assert machine.memory.read_byte(0x0001) == 0x00
+
+
+def test_real_rom_boot_message_clarifies_basic_is_enabled_when_option_not_held(
+    monkeypatch, tmp_path, capsys
+):
+    from pyatari import machine as machine_module
+
+    rom_dir = tmp_path / "roms"
+    rom_dir.mkdir()
+    (rom_dir / "atarixl.rom").write_bytes(create_test_rom_stub(0x4000))
+    (rom_dir / "ataribas.rom").write_bytes(create_test_rom_stub(0x2000))
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["pyatari", "--frames", "1", "--real-rom-boot", "--rom-dir", str(rom_dir)],
+    )
+
+    machine_module.main()
+
+    output = capsys.readouterr().out
+    assert "OPTION not held" in output
+    assert "BASIC remains enabled" in output
+
+
+def test_real_rom_boot_message_reports_post_checksum_fallback(
+    monkeypatch, tmp_path, capsys
+):
+    from pyatari import machine as machine_module
+
+    rom_dir = tmp_path / "roms"
+    rom_dir.mkdir()
+    (rom_dir / "atarixl.rom").write_bytes(create_test_rom_stub(0x4000))
+    (rom_dir / "ataribas.rom").write_bytes(create_test_rom_stub(0x2000))
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["pyatari", "--frames", "1", "--real-rom-boot", "--rom-dir", str(rom_dir)],
+    )
+    monkeypatch.setattr(
+        Machine,
+        "continue_without_self_test",
+        lambda self, max_steps=800_000: True,
+    )
+
+    machine_module.main()
+
+    output = capsys.readouterr().out
+    assert "post-checksum warm-start fallback" in output
