@@ -804,7 +804,7 @@ def main() -> None:
     import argparse
     from pathlib import Path
 
-    from pyatari.rom_loader import load_basic_rom, load_os_rom
+    from pyatari.rom_loader import find_self_test_rom, load_basic_rom, load_self_test_rom, load_xl_rom_bundle
 
     parser = argparse.ArgumentParser(description="PyAtari — Atari 800 emulator")
     parser.add_argument("xex", nargs="?", help="XEX executable to load")
@@ -835,16 +835,34 @@ def main() -> None:
     # Load ROMs if available
     os_rom_path = rom_dir / "atarixl.rom"
     basic_rom_path = rom_dir / "ataribas.rom"
+    self_test_rom_path = find_self_test_rom(rom_dir)
     if os_rom_path.exists():
-        os_rom = load_os_rom(os_rom_path)
+        os_rom, bundled_self_test_rom = load_xl_rom_bundle(os_rom_path)
         machine.memory.load_os_rom(os_rom.data)
         print(f"Loaded OS ROM: {os_rom_path}")
+        if bundled_self_test_rom is not None:
+            machine.memory.load_self_test_rom(bundled_self_test_rom.data)
+            print(f"Loaded bundled self-test ROM from: {os_rom_path}")
     else:
         print(f"Warning: OS ROM not found at {os_rom_path}")
     if basic_rom_path.exists():
         basic_rom = load_basic_rom(basic_rom_path)
         machine.memory.load_basic_rom(basic_rom.data)
         print(f"Loaded BASIC ROM: {basic_rom_path}")
+    if self_test_rom_path is not None:
+        self_test_rom = load_self_test_rom(self_test_rom_path)
+        machine.memory.load_self_test_rom(self_test_rom.data)
+        print(f"Loaded self-test ROM: {self_test_rom_path}")
+    elif (
+        args.real_rom_boot
+        and args.xex is None
+        and os_rom_path.exists()
+        and machine.memory.self_test_rom is None
+    ):
+        print(
+            "Warning: self-test ROM not found; real cold boot may divert into the "
+            "self-test checksum path instead of reaching BASIC."
+        )
 
     machine.reset()
 

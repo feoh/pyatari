@@ -6,7 +6,7 @@ import argparse
 from pathlib import Path
 
 from pyatari.machine import Machine
-from pyatari.rom_loader import load_basic_rom, load_os_rom
+from pyatari.rom_loader import find_self_test_rom, load_basic_rom, load_self_test_rom, load_xl_rom_bundle
 
 
 def main() -> None:
@@ -24,9 +24,15 @@ def main() -> None:
     machine = Machine()
     os_rom_path = args.rom_dir / "atarixl.rom"
     basic_rom_path = args.rom_dir / "ataribas.rom"
-    machine.memory.load_os_rom(load_os_rom(os_rom_path).data)
+    self_test_rom_path = find_self_test_rom(args.rom_dir)
+    os_rom, bundled_self_test_rom = load_xl_rom_bundle(os_rom_path)
+    machine.memory.load_os_rom(os_rom.data)
     if basic_rom_path.exists():
         machine.memory.load_basic_rom(load_basic_rom(basic_rom_path).data)
+    if bundled_self_test_rom is not None:
+        machine.memory.load_self_test_rom(bundled_self_test_rom.data)
+    if self_test_rom_path is not None:
+        machine.memory.load_self_test_rom(load_self_test_rom(self_test_rom_path).data)
     machine.reset()
 
     print(
