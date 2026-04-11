@@ -195,16 +195,21 @@ class POKEY:
             int(IRQBits.TIMER1) | int(IRQBits.TIMER2) | int(IRQBits.TIMER4)
         )
 
-    def press_key(self, keycode: int) -> bool:
+    def press_key(self, keycode: int, *, shift: bool = False, control: bool = False) -> bool:
         if not self.skctl & int(SKCTLBits.KEYBOARD_SCAN):
             return False
-        self.kbcode = keycode & 0xFF
+        modifiers = (0x40 if shift else 0x00) | (0x80 if control else 0x00)
+        self.kbcode = (keycode & 0x3F) | modifiers
         self.skstat &= ~int(SKSTATBits.KEY_DOWN) & 0xFF
+        if shift:
+            self.skstat &= ~int(SKSTATBits.SHIFT) & 0xFF
+        else:
+            self.skstat |= int(SKSTATBits.SHIFT)
         self.irqst &= ~int(IRQBits.KEYBOARD) & 0xFF
         return bool(self.irqen & int(IRQBits.KEYBOARD))
 
     def release_key(self) -> None:
-        self.skstat |= int(SKSTATBits.KEY_DOWN)
+        self.skstat |= int(SKSTATBits.KEY_DOWN | SKSTATBits.SHIFT)
         self.irqst |= int(IRQBits.KEYBOARD)
 
     def queue_serial_input(self, data: int, *, skstat: int = 0x00) -> None:

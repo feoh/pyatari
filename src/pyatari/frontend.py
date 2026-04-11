@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import deque
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -15,6 +17,8 @@ if TYPE_CHECKING:
 
 DISPLAY_WIDTH = 384
 DISPLAY_HEIGHT = 240
+KEY_HOLD_FRAMES = 8
+KEY_RELEASE_FRAMES = 4
 
 # ---------------------------------------------------------------------------
 # Pygame key -> Atari key name (must match machine.KEYCODE_MAP keys)
@@ -34,6 +38,38 @@ PYGAME_TO_ATARI_KEY: dict[int, str] = {
     pygame.K_RETURN: "return",
     pygame.K_BACKSPACE: "backspace",
 }
+
+
+@dataclass(slots=True)
+class KeyboardBuffer:
+    queued_keys: deque[str]
+    active_key: str | None = None
+    hold_frames_remaining: int = 0
+    release_frames_remaining: int = 0
+
+    def enqueue(self, key: str) -> None:
+        self.queued_keys.append(key)
+
+    def update(self, machine: Machine) -> None:
+        if self.active_key is not None:
+            self.hold_frames_remaining -= 1
+            if self.hold_frames_remaining <= 0:
+                machine.release_key()
+                self.active_key = None
+                self.release_frames_remaining = KEY_RELEASE_FRAMES
+            return
+
+        if self.release_frames_remaining > 0:
+            self.release_frames_remaining -= 1
+            return
+
+        if self.queued_keys:
+            self.active_key = self.queued_keys.popleft()
+            machine.press_key(self.active_key)
+            self.hold_frames_remaining = KEY_HOLD_FRAMES
+
+
+_KEYBOARD_BUFFER = KeyboardBuffer(queued_keys=deque())
 
 
 # ---------------------------------------------------------------------------
@@ -72,8 +108,9 @@ def _flush_audio(audio: AudioOutput, channel: pygame.mixer.Channel) -> None:
 # ---------------------------------------------------------------------------
 # Event handling
 # ---------------------------------------------------------------------------
-def _handle_events(machine: Machine) -> bool:
+def _handle_events(machine: Machine, keyboard: KeyboardBuffer | None = None) -> bool:
     """Process pygame events. Returns False when the frontend should quit."""
+    keyboard = keyboard if keyboard is not None else _KEYBOARD_BUFFER
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             return False
@@ -82,13 +119,13 @@ def _handle_events(machine: Machine) -> bool:
             if event.key == pygame.K_ESCAPE:
                 return False
             if event.key in {pygame.K_RETURN, pygame.K_BACKSPACE}:
-                machine.press_key(PYGAME_TO_ATARI_KEY[event.key])
+                keyboard.enqueue(PYGAME_TO_ATARI_KEY[event.key])
                 continue
             if event.unicode and " " <= event.unicode <= "~":
-                machine.press_key(event.unicode)
+                keyboard.enqueue(event.unicode)
                 continue
             if event.key in PYGAME_TO_ATARI_KEY:
-                machine.press_key(PYGAME_TO_ATARI_KEY[event.key])
+                keyboard.enqueue(PYGAME_TO_ATARI_KEY[event.key])
             elif event.key == pygame.K_F2:
                 machine.set_console_switches(start=True)
             elif event.key == pygame.K_F3:
@@ -99,9 +136,7 @@ def _handle_events(machine: Machine) -> bool:
                 machine.press_reset()
 
         elif event.type == pygame.KEYUP:
-            if event.key in PYGAME_TO_ATARI_KEY:
-                machine.release_key()
-            elif event.key == pygame.K_F2:
+            if event.key == pygame.K_F2:
                 machine.set_console_switches(start=False)
             elif event.key == pygame.K_F3:
                 machine.set_console_switches(select=False)
@@ -141,13 +176,15 @@ def run(machine: Machine, *, scale: int = 2) -> None:
     native_surface = pygame.Surface((DISPLAY_WIDTH, DISPLAY_HEIGHT))
     clock = pygame.time.Clock()
     audio_channel = pygame.mixer.Channel(0)
+    keyboard = KeyboardBuffer(queued_keys=deque())
 
     running = True
     while running:
-        if not _handle_events(machine):
+        if not _handle_events(machine, keyboard):
             break
 
         _poll_joystick(machine)
+        keyboard.update(machine)
 
         machine.run_frame(queue_audio=True)
 

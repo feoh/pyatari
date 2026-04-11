@@ -36,7 +36,7 @@ from pyatari.pokey import DEFAULT_AUDIO_SAMPLE_RATE, POKEY
 from pyatari.sio import DiskDrive, SIOBus, XEXImage
 
 
-KEYCODE_MAP = {
+KEYCODE_MAP: dict[str, int] = {
     "a": 0x3F,
     "b": 0x15,
     "c": 0x12,
@@ -75,6 +75,36 @@ KEYCODE_MAP = {
     "9": 0x30,
     "space": 0x21,
     "return": 0x0C,
+    ";": 0x02,
+    "+": 0x06,
+    "*": 0x07,
+    "-": 0x0E,
+    "=": 0x0F,
+    ",": 0x20,
+    ".": 0x22,
+    "/": 0x26,
+    "'": 0x33,
+    "<": 0x36,
+    ">": 0x37,
+}
+SHIFTED_KEYCODE_MAP: dict[str, int] = {
+    "!": 0x1F,
+    '"': 0x1E,
+    "#": 0x1A,
+    "$": 0x18,
+    "%": 0x1D,
+    "&": 0x1B,
+    "(": 0x30,
+    ")": 0x32,
+    ":": 0x02,
+    "\\": 0x06,
+    "^": 0x07,
+    "_": 0x0E,
+    "|": 0x0F,
+    "[": 0x20,
+    "]": 0x22,
+    "?": 0x26,
+    "@": 0x35,
 }
 
 DEMO_DISPLAY_LIST_ADDRESS = 0x2400
@@ -339,7 +369,11 @@ class Machine:
     def press_key(self, key: str) -> None:
         normalized = key.lower()
         keycode = KEYCODE_MAP.get(normalized)
-        if keycode is not None and self.pokey.press_key(keycode):
+        shift = False
+        if keycode is None:
+            keycode = SHIFTED_KEYCODE_MAP.get(key)
+            shift = keycode is not None
+        if keycode is not None and self.pokey.press_key(keycode, shift=shift):
             self.cpu.irq()
 
     def release_key(self) -> None:
@@ -674,7 +708,12 @@ def main() -> None:
     parser.add_argument(
         "--real-rom-boot",
         action="store_true",
-        help="run the actual ROM boot path",
+        help="run the actual ROM boot path (default when OS ROM is present)",
+    )
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="force the ROM-free graphics demo instead of booting available ROMs",
     )
     args = parser.parse_args()
 
@@ -705,7 +744,7 @@ def main() -> None:
         machine.memory.load_self_test_rom(self_test_rom.data)
         print(f"Loaded self-test ROM: {self_test_rom_path}")
     elif (
-        args.real_rom_boot
+        not args.demo
         and args.xex is None
         and os_rom_path.exists()
         and machine.memory.self_test_rom is None
@@ -716,9 +755,10 @@ def main() -> None:
         )
 
     machine.reset()
-    if args.real_rom_boot and args.xex is None and basic_rom_path.exists():
+    boot_real_rom = args.xex is None and not args.demo and os_rom_path.exists()
+    if boot_real_rom and basic_rom_path.exists():
         print("Boot configuration: OPTION not held, so built-in BASIC remains enabled.")
-    if args.real_rom_boot and args.xex is None and machine.memory.self_test_rom is None:
+    if boot_real_rom and machine.memory.self_test_rom is None:
         if machine.continue_without_self_test():
             print(
                 "Continuing from post-checksum warm-start fallback because self-test "
@@ -739,9 +779,11 @@ def main() -> None:
             f"{len(image.segments)} segment(s), run address {run_addr}"
         )
 
-    if args.xex is None and not os_rom_path.exists():
-        if not args.real_rom_boot:
-            machine.load_demo_screen()
+    if args.xex is None and not boot_real_rom:
+        machine.load_demo_screen()
+        if args.demo:
+            print("Loaded built-in graphics demo (--demo requested)")
+        else:
             print("Loaded built-in graphics demo (no ROMs or XEX supplied)")
     elif args.xex is None:
         print("Running real ROM boot path")

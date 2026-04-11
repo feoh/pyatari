@@ -109,6 +109,24 @@ Observed outcome from these changes:
   keyboard scanning, debounced key-down state clears `SKSTAT` bit 2, `KBCODE`
   remains latched after release, and a key press asserts the keyboard IRQ when
   `IRQEN` enables it.
+- Shifted keyboard input now sets the `KBCODE` Shift modifier bit and the
+  active-low `SKSTAT` Shift state so ROM-driven BASIC entry can produce quoted
+  strings and other shifted punctuation through the real editor path.
+- A ROM smoke test can now type `10PRINT"A"`, press Return, type `RUN`, press
+  Return, print `A`, and return to the BASIC `READY` prompt without using the
+  removed synthetic shell.
+- The pygame frontend now tracks which key events generated Atari key presses
+  so printable punctuation entered through `event.unicode` is released on the
+  matching `KEYUP`. This matters for ROM-driven BASIC entry because quoted
+  strings and colon-separated statements depend on shifted punctuation not
+  leaving POKEY's key-down state stuck.
+- Real ROM boot is now the default startup path whenever an OS ROM is available;
+  `--real-rom-boot` remains accepted for compatibility, and `--demo` is the
+  explicit opt-in path for the built-in ROM-free graphics demo.
+- Frontend keyboard input is now buffered and delivered to the emulator one key
+  at a time across multiple frames. This avoids losing fast host typing when
+  pygame receives multiple keydown/keyup pairs before the slower Python emulator
+  has advanced far enough for the Atari ROM keyboard handler to observe them.
 
 This keeps the project aligned with the original decision in this ADR:
 temporary help for incomplete ROM boot should come from targeted diagnostics and

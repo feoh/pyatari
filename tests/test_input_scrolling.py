@@ -52,6 +52,18 @@ def test_keyboard_press_queues_irq_when_pokey_irq_is_enabled():
     assert machine.cpu.irq_pending is True
 
 
+def test_shifted_punctuation_key_mapping_updates_kbcode():
+    machine = make_machine()
+    machine.memory.write_byte(
+        int(POKEYWriteRegister.SKCTL),
+        int(SKCTLBits.KEYBOARD_SCAN | SKCTLBits.KEYBOARD_DEBOUNCE),
+    )
+
+    machine.press_key('"')
+
+    assert machine.pokey.kbcode == 0x5E
+
+
 def test_console_switches_are_active_low():
     machine = make_machine()
 

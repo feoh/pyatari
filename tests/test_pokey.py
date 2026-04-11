@@ -73,6 +73,24 @@ def test_keyboard_press_requests_irq_when_enabled():
     assert pokey.press_key(0x3F) is True
 
 
+def test_keyboard_modifiers_are_encoded_in_kbcode_and_skstat():
+    pokey = POKEY(memory=MemoryBus())
+    pokey.write_register(
+        int(POKEYWriteRegister.SKCTL),
+        int(SKCTLBits.KEYBOARD_SCAN | SKCTLBits.KEYBOARD_DEBOUNCE),
+    )
+
+    pokey.press_key(0x1E, shift=True)
+
+    assert pokey.read_register(int(POKEYReadRegister.KBCODE)) == 0x5E
+    assert pokey.read_register(int(POKEYReadRegister.SKSTAT)) & int(SKSTATBits.SHIFT) == 0
+
+    pokey.release_key()
+
+    assert pokey.read_register(int(POKEYReadRegister.KBCODE)) == 0x5E
+    assert pokey.read_register(int(POKEYReadRegister.SKSTAT)) & int(SKSTATBits.SHIFT)
+
+
 def test_serial_output_schedules_need_irq_before_done_irq():
     pokey = POKEY(memory=MemoryBus())
     pokey.write_register(

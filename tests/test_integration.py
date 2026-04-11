@@ -249,7 +249,7 @@ def test_real_rom_boot_message_clarifies_basic_is_enabled_when_option_not_held(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["pyatari", "--frames", "1", "--real-rom-boot", "--rom-dir", str(rom_dir)],
+        ["pyatari", "--frames", "1", "--rom-dir", str(rom_dir)],
     )
     monkeypatch.setattr(
         Machine,
@@ -277,7 +277,7 @@ def test_real_rom_boot_message_reports_post_checksum_fallback(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["pyatari", "--frames", "1", "--real-rom-boot", "--rom-dir", str(rom_dir)],
+        ["pyatari", "--frames", "1", "--rom-dir", str(rom_dir)],
     )
     monkeypatch.setattr(
         Machine,
@@ -289,6 +289,28 @@ def test_real_rom_boot_message_reports_post_checksum_fallback(
 
     output = capsys.readouterr().out
     assert "post-checksum warm-start fallback" in output
+
+
+def test_demo_flag_forces_demo_even_when_roms_are_present(
+    monkeypatch, tmp_path, capsys
+):
+    from pyatari import machine as machine_module
+
+    rom_dir = tmp_path / "roms"
+    rom_dir.mkdir()
+    (rom_dir / "atarixl.rom").write_bytes(create_test_rom_stub(0x4000))
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["pyatari", "--frames", "1", "--demo", "--rom-dir", str(rom_dir)],
+    )
+
+    machine_module.main()
+
+    output = capsys.readouterr().out
+    assert "Loaded built-in graphics demo (--demo requested)" in output
+    assert "Running real ROM boot path" not in output
 
 
 def test_machine_leaves_missing_sio_device_probe_silent():
