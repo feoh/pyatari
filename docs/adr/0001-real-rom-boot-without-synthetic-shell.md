@@ -127,6 +127,12 @@ Observed outcome from these changes:
   at a time across multiple frames. This avoids losing fast host typing when
   pygame receives multiple keydown/keyup pairs before the slower Python emulator
   has advanced far enough for the Atari ROM keyboard handler to observe them.
+- BASIC text-mode colors now follow GTIA high-resolution playfield semantics
+  instead of treating `COLBK` as the Graphics 0 background. Per the Altirra
+  hardware manual's high-resolution playfield description, ANTIC mode 2 and
+  mode 15 use `COLPF2` for the hue/background and `COLPF1` for the set-pixel
+  luminance; GTIA color bit 0 is also ignored outside GTIA mode 9. This makes
+  the ROM's default `COLOR2=$94` screen render as blue rather than black.
 
 This keeps the project aligned with the original decision in this ADR:
 temporary help for incomplete ROM boot should come from targeted diagnostics and

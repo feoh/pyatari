@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import sqrt
 
 from pyatari.antic import DisplayListLine
 from pyatari.constants import (
@@ -20,6 +21,23 @@ GTIA_MIRROR_BASE = 0xD000
 GTIA_MIRROR_MASK = 0x1F
 DISPLAY_WIDTH = 384
 DISPLAY_HEIGHT = 240
+GTIA_HUE_RGB = {
+    0x1: (192, 116, 0),
+    0x2: (208, 72, 32),
+    0x3: (192, 48, 88),
+    0x4: (144, 64, 152),
+    0x5: (96, 72, 192),
+    0x6: (48, 96, 208),
+    0x7: (24, 132, 192),
+    0x8: (24, 156, 144),
+    0x9: (0, 150, 255),
+    0xA: (88, 168, 88),
+    0xB: (136, 160, 56),
+    0xC: (176, 144, 40),
+    0xD: (208, 128, 32),
+    0xE: (224, 112, 24),
+    0xF: (216, 104, 8),
+}
 
 
 @dataclass(slots=True)
@@ -88,12 +106,16 @@ class GTIA:
     def color_to_rgb(self, value: int) -> int:
         value &= 0xFF
         hue = (value >> 4) & 0x0F
-        luminance = value & 0x0F
-        brightness = min(255, luminance * 16 + 15)
-        phase = hue / 16.0
-        red = int(brightness * (0.55 + 0.45 * ((phase + 0.00) % 1.0))) & 0xFF
-        green = int(brightness * (0.55 + 0.45 * ((phase + 0.33) % 1.0))) & 0xFF
-        blue = int(brightness * (0.55 + 0.45 * ((phase + 0.66) % 1.0))) & 0xFF
+        luminance = value & 0x0E
+        brightness = sqrt(luminance / 14.0)
+        if hue == 0:
+            gray = int(255 * brightness)
+            return (gray << 16) | (gray << 8) | gray
+
+        base_red, base_green, base_blue = GTIA_HUE_RGB[hue]
+        red = int(base_red * brightness)
+        green = int(base_green * brightness)
+        blue = int(base_blue * brightness)
         return (red << 16) | (green << 8) | blue
 
     def render_scanline(
@@ -148,8 +170,12 @@ class GTIA:
     ) -> None:
         chars = [self.memory.read_byte(line.screen_address + column) for column in range(columns)]
         glyph_row = (row + vertical_offset) % ANTIC_MODES[line.mode].scanlines_per_row
-        fg_color = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLPF1)])
-        bg_color = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLBK)])
+        if line.mode in {2, 3}:
+            fg_color = self._hires_luminance_color()
+            bg_color = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLPF2)])
+        else:
+            fg_color = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLPF1)])
+            bg_color = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLBK)])
         alt_fg = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLPF2)])
         alt_bg = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLPF0)])
         out_row = self.framebuffer[row]
@@ -202,8 +228,12 @@ class GTIA:
                 for shift in (6, 4, 2, 0):
                     pixels.append(colors[(byte >> shift) & 0x03])
         elif line.mode in {9, 11, 12, 15}:
-            fg = colors[1]
-            bg = colors[0]
+            if line.mode == 15:
+                fg = self._hires_luminance_color()
+                bg = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLPF2)])
+            else:
+                fg = colors[1]
+                bg = colors[0]
             for byte in data:
                 for bit in range(8):
                     pixels.append(fg if byte & (0x80 >> bit) else bg)
@@ -329,6 +359,11 @@ class GTIA:
         out_row = self.framebuffer[row]
         for x in range(DISPLAY_WIDTH):
             out_row[x] = color
+
+    def _hires_luminance_color(self) -> int:
+        pf2 = self.write_registers[int(GTIAWriteRegister.COLPF2)]
+        pf1 = self.write_registers[int(GTIAWriteRegister.COLPF1)]
+        return self.color_to_rgb((pf2 & 0xF0) | (pf1 & 0x0E))
 
     def _normalize(self, address: int) -> int:
         return GTIA_MIRROR_BASE + ((address - GTIA_MIRROR_BASE) & GTIA_MIRROR_MASK)

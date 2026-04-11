@@ -53,26 +53,35 @@ def test_color_to_rgb_changes_with_input():
 
     dark = gtia.color_to_rgb(0x00)
     bright = gtia.color_to_rgb(0x0E)
-    different_hue = gtia.color_to_rgb(0xA0)
+    different_hue = gtia.color_to_rgb(0xAE)
 
     assert dark != bright
     assert dark != different_hue
+    assert gtia.color_to_rgb(0x94) == gtia.color_to_rgb(0x95)
 
 
-def test_render_scanline_mode_2_text_uses_charset_bits():
+def test_color_to_rgb_maps_basic_blue_distinctly_from_black():
+    gtia = GTIA(memory=MemoryBus())
+
+    assert gtia.color_to_rgb(0x00) == 0x000000
+    assert gtia.color_to_rgb(0x94) == 0x005088
+    assert gtia.color_to_rgb(0x9A) == 0x007ED7
+
+
+def test_render_scanline_mode_2_text_uses_hires_playfield_colors():
     memory = MemoryBus()
     gtia = GTIA(memory=memory)
-    gtia.write_register(int(GTIAWriteRegister.COLPF1), 0x0E)
-    gtia.write_register(int(GTIAWriteRegister.COLBK), 0x00)
+    gtia.write_register(int(GTIAWriteRegister.COLPF1), 0xCA)
+    gtia.write_register(int(GTIAWriteRegister.COLPF2), 0x94)
     memory.write_byte(0x3000, 0x41)
     memory.write_byte(0x1608, 0b10000000)  # simplified glyph row for char $41
 
     line = DisplayListLine(instruction_address=0x2000, instruction=0x42, mode=2, scanlines=8, screen_address=0x3000)
     gtia.render_scanline(line, row=0, antic_chbase=0x14)
 
-    assert gtia.framebuffer[0][0] == gtia.color_to_rgb(0x0E)
-    assert gtia.framebuffer[0][1] == gtia.color_to_rgb(0x00)
-    assert gtia.framebuffer[0][DISPLAY_WIDTH - 1] == gtia.color_to_rgb(0x00)
+    assert gtia.framebuffer[0][0] == gtia.color_to_rgb(0x9A)
+    assert gtia.framebuffer[0][1] == gtia.color_to_rgb(0x94)
+    assert gtia.framebuffer[0][DISPLAY_WIDTH - 1] == gtia.color_to_rgb(0x94)
 
 
 def test_display_surface_copies_gtia_framebuffer():
@@ -89,19 +98,19 @@ def test_display_surface_copies_gtia_framebuffer():
 def test_render_scanline_inverse_text_uses_chactl():
     memory = MemoryBus()
     gtia = GTIA(memory=memory)
-    gtia.write_register(int(GTIAWriteRegister.COLPF1), 0x0E)
-    gtia.write_register(int(GTIAWriteRegister.COLBK), 0x00)
+    gtia.write_register(int(GTIAWriteRegister.COLPF1), 0xCA)
+    gtia.write_register(int(GTIAWriteRegister.COLPF2), 0x94)
     memory.write_byte(0x3000, 0xC1)
     memory.write_byte(0x1608, 0b10000000)
 
     line = DisplayListLine(instruction_address=0x2000, instruction=0x42, mode=2, scanlines=8, screen_address=0x3000)
     gtia.render_scanline(line, row=0, antic_chbase=0x14, antic_chactl=0)
-    assert gtia.framebuffer[0][0] == gtia.color_to_rgb(0x00)
-    assert gtia.framebuffer[0][1] == gtia.color_to_rgb(0x0E)
+    assert gtia.framebuffer[0][0] == gtia.color_to_rgb(0x94)
+    assert gtia.framebuffer[0][1] == gtia.color_to_rgb(0x9A)
 
     gtia.render_scanline(line, row=1, antic_chbase=0x14, antic_chactl=int(CHACTLBits.INVERSE))
-    assert gtia.framebuffer[1][0] == gtia.color_to_rgb(0x00)
-    assert gtia.framebuffer[1][1] == gtia.color_to_rgb(0x00)
+    assert gtia.framebuffer[1][0] == gtia.color_to_rgb(0x94)
+    assert gtia.framebuffer[1][1] == gtia.color_to_rgb(0x94)
 
 
 
@@ -144,6 +153,20 @@ def test_render_scanline_bitmap_mode_8_uses_playfield_colors():
     assert gtia.framebuffer[0][9] == gtia.color_to_rgb(0x12)
     assert gtia.framebuffer[0][18] == gtia.color_to_rgb(0x24)
     assert gtia.framebuffer[0][27] == gtia.color_to_rgb(0x36)
+
+
+def test_render_scanline_bitmap_mode_15_uses_hires_playfield_colors():
+    memory = MemoryBus()
+    gtia = GTIA(memory=memory)
+    gtia.write_register(int(GTIAWriteRegister.COLPF1), 0xCA)
+    gtia.write_register(int(GTIAWriteRegister.COLPF2), 0x94)
+    memory.write_byte(0x3200, 0b10000000)
+
+    line = DisplayListLine(instruction_address=0x2000, instruction=0x4F, mode=15, scanlines=1, screen_address=0x3200)
+    gtia.render_scanline(line, row=0)
+
+    assert gtia.framebuffer[0][0] == gtia.color_to_rgb(0x9A)
+    assert gtia.framebuffer[0][1] == gtia.color_to_rgb(0x94)
 
 
 

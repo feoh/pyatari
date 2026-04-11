@@ -100,6 +100,7 @@ def test_break_and_reset_queue_interrupts():
 
 def test_horizontal_fine_scroll_shifts_pixels():
     machine = make_machine()
+    machine.gtia.write_register(0xD018, 0x30)
     machine.gtia.write_register(0xD016, 0x0E)
     machine.gtia.write_register(0xD017, 0x2A)
     machine.memory.load_ram(0x3000, bytes([0b10000000]))
@@ -114,8 +115,11 @@ def test_horizontal_fine_scroll_shifts_pixels():
 
     machine.gtia.render_scanline(line, row=0, antic_hscrol=3)
 
-    bg = machine.gtia.color_to_rgb(machine.gtia.write_registers[0xD01A])
-    fg = machine.gtia.color_to_rgb(machine.gtia.write_registers[0xD017])
+    bg = machine.gtia.color_to_rgb(machine.gtia.write_registers[0xD018])
+    fg = machine.gtia.color_to_rgb(
+        (machine.gtia.write_registers[0xD018] & 0xF0)
+        | (machine.gtia.write_registers[0xD017] & 0x0E)
+    )
     row = machine.gtia.framebuffer[0]
     assert row[0] == bg
     assert row[1] == bg
@@ -125,6 +129,7 @@ def test_horizontal_fine_scroll_shifts_pixels():
 
 def test_vertical_fine_scroll_changes_glyph_row_source():
     gtia = GTIA(memory=make_machine().memory)
+    gtia.write_register(0xD018, 0x30)
     gtia.write_register(0xD017, 0x3A)
     gtia.memory.load_ram(0x4000, bytes([0x00]))
     gtia.memory.write_byte(0x2000 + 2, 0x80)
@@ -139,5 +144,8 @@ def test_vertical_fine_scroll_changes_glyph_row_source():
 
     gtia.render_scanline(line, row=0, antic_chbase=0x20, antic_vscrol=2)
 
-    fg = gtia.color_to_rgb(gtia.write_registers[0xD017])
+    fg = gtia.color_to_rgb(
+        (gtia.write_registers[0xD018] & 0xF0)
+        | (gtia.write_registers[0xD017] & 0x0E)
+    )
     assert gtia.framebuffer[0][0] == fg
