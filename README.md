@@ -1,10 +1,13 @@
 # PyAtari -- Educational Atari 800XL Emulator
 
+![Atari 800XL BASIC Prompt Using PyAtari Emulator](Atari800XLReady.png)
+
 An Atari 800XL emulator written in Python for educational purposes. The goal is
 to help people understand how the computer works in detail by seeing it
 represented in a modern, high-level programming language.
 
 **This emulator prioritizes clarity and readability over performance.**
+**No, I'm Not Kidding. It's really, REALLY slow! The goal is the code.**
 
 ## Hardware Emulated
 
@@ -40,6 +43,9 @@ These are copyrighted and not included. Place them in the `roms/` directory:
 
 - `atarixl.rom` (16384 bytes) -- Atari XL/XE OS ROM
 - `ataribas.rom` (8192 bytes) -- Atari BASIC ROM
+- Optional self-test ROM: the emulator will also load a standalone self-test ROM
+  from `roms/` when present. Supported filenames are `atarixlselftest.rom`,
+  `atarixl-selftest.rom`, `atarixl_selftest.rom`, and `selftest.rom`.
 
 The emulator can also run in "bare metal" mode without ROMs, loading raw 6502
 machine code or XEX executables directly.
