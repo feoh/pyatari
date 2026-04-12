@@ -108,6 +108,25 @@ def test_load_demo_screen_produces_visible_frame_without_roms():
     assert lit_pixels > 0
 
 
+def test_load_demo_screen_does_not_repeat_display_list_below_visible_rows():
+    machine = Machine()
+    machine.reset()
+
+    machine.load_demo_screen()
+    machine.run_frame(queue_audio=False)
+
+    background = machine.gtia.color_to_rgb(
+        machine.memory.read_byte(int(GTIAWriteRegister.COLBK))
+    )
+    lit_bottom_pixels = sum(
+        pixel != background
+        for row in machine.gtia.framebuffer[200:]
+        for pixel in row
+    )
+
+    assert lit_bottom_pixels == 0
+
+
 def test_has_visible_output_detects_demo_frame():
     machine = Machine()
     machine.reset()

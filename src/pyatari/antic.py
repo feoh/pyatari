@@ -231,7 +231,12 @@ class ANTIC:
         if self.current_line_remaining <= 0:
             if self.dmactl & DL_DMA:
                 self.current_line = self.fetch_next_display_list_line()
-                self.current_line_remaining = max(1, self.current_line.scanlines)
+                if self.current_line.wait_for_vblank:
+                    self.current_line_remaining = max(
+                        1, SCANLINES_PER_FRAME - self.scanline
+                    )
+                else:
+                    self.current_line_remaining = max(1, self.current_line.scanlines)
             else:
                 self.current_line = None
                 self.current_line_remaining = 1

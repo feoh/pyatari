@@ -63,6 +63,38 @@ def test_fetch_display_list_line_handles_jump_and_jvb():
     assert jvb.wait_for_vblank is True
 
 
+def test_jvb_waits_until_frame_wrap_before_fetching_next_line():
+    memory = MemoryBus()
+    antic = ANTIC(memory=memory)
+    antic.dmactl = int(DMACTLBits.DL_DMA)
+    antic.display_list_pc = 0x2100
+    antic.scanline = 200
+    memory.load_ram(0x2100, bytes([0x41, 0x00, 0x22]))
+    memory.load_ram(0x2200, bytes([0x70]))
+
+    line = antic.step_scanline()
+
+    assert line is not None
+    assert line.wait_for_vblank is True
+    assert antic.display_list_pc == 0x2200
+    assert antic.current_line is line
+
+    antic.step_scanline()
+
+    assert antic.current_line is line
+    assert antic.display_list_pc == 0x2200
+
+    while antic.scanline != 0:
+        antic.step_scanline()
+
+    assert antic.current_line is None
+
+    next_line = antic.step_scanline()
+
+    assert next_line is not None
+    assert next_line.instruction == 0x70
+
+
 def test_blank_instruction_scanline_count_is_decoded():
     antic = ANTIC(memory=MemoryBus())
     antic.display_list_pc = 0x2200
