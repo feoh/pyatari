@@ -166,6 +166,10 @@ class MemoryBus:
         return "\n".join(lines)
 
     def _read_rom_overlay(self, address: int) -> int | None:
+        # Below the self-test ROM ($5000) no ROM region exists, so skip all checks.
+        if address < SELF_TEST_START:
+            return None
+
         if BASIC_ROM_START <= address <= BASIC_ROM_END and self._basic_rom_enabled():
             if self.basic_rom is not None:
                 return self.basic_rom[address - BASIC_ROM_START]

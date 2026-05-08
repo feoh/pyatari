@@ -34,9 +34,6 @@ class MasterClock:
             frames_advanced, self.scanline = divmod(absolute_scanline, SCANLINES_PER_FRAME)
             self.frame += frames_advanced
 
-    def tick_instruction(self, elapsed_cycles: int) -> None:
-        self.tick(elapsed_cycles)
-
     def reset(self) -> None:
         self.total_cycles = 0
         self.frame = 0

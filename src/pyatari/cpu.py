@@ -11,6 +11,11 @@ from pyatari.opcodes import AddressMode, OPCODES, Opcode
 
 STACK_BASE = 0x0100
 
+# Instructions with no operand always produce the same AddressResult.
+# Allocating one shared instance avoids a dataclass construction per instruction.
+_IMPLIED_OPERAND = AddressResult(address=None)
+_NO_OPERAND_MODES = frozenset({AddressMode.IMPLIED, AddressMode.ACCUMULATOR})
+
 
 @dataclass(slots=True)
 class StatusRegister:
@@ -107,8 +112,8 @@ class CPU:
         return opcode
 
     def _resolve_operand(self, opcode: Opcode) -> AddressResult:
-        if opcode.mode in {AddressMode.IMPLIED, AddressMode.ACCUMULATOR}:
-            return AddressResult(address=None)
+        if opcode.mode in _NO_OPERAND_MODES:
+            return _IMPLIED_OPERAND
         return resolve_address(self, opcode.mode)
 
     def _execute(self, opcode: Opcode, operand: AddressResult) -> None:
