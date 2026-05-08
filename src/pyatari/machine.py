@@ -439,45 +439,43 @@ class Machine:
     def _render_visible_scanlines(self) -> None:
         row = self.antic.scanline - 1
         if self.antic.current_line is not None and 0 <= row < self.display.height:
+            # All GTIA write registers are guaranteed initialised in __post_init__,
+            # so use direct subscript (no default needed) instead of dict.get.
+            wr = self.gtia.write_registers
             self.gtia.begin_scanline_render()
             self.gtia.render_player(
                 0,
-                xpos=self.gtia.write_registers.get(0xD000, 0),
-                graphics=self.gtia.write_registers.get(0xD00D, 0),
-                size=self.gtia.write_registers.get(0xD008, 0),
-                color=self.gtia.write_registers.get(0xD012, 0),
+                xpos=wr[0xD000],
+                graphics=wr[0xD00D],
+                size=wr[0xD008],
+                color=wr[0xD012],
             )
             self.gtia.render_player(
                 1,
-                xpos=self.gtia.write_registers.get(0xD001, 0),
-                graphics=self.gtia.write_registers.get(0xD00E, 0),
-                size=self.gtia.write_registers.get(0xD009, 0),
-                color=self.gtia.write_registers.get(0xD013, 0),
+                xpos=wr[0xD001],
+                graphics=wr[0xD00E],
+                size=wr[0xD009],
+                color=wr[0xD013],
             )
             self.gtia.render_player(
                 2,
-                xpos=self.gtia.write_registers.get(0xD002, 0),
-                graphics=self.gtia.write_registers.get(0xD00F, 0),
-                size=self.gtia.write_registers.get(0xD00A, 0),
-                color=self.gtia.write_registers.get(0xD014, 0),
+                xpos=wr[0xD002],
+                graphics=wr[0xD00F],
+                size=wr[0xD00A],
+                color=wr[0xD014],
             )
             self.gtia.render_player(
                 3,
-                xpos=self.gtia.write_registers.get(0xD003, 0),
-                graphics=self.gtia.write_registers.get(0xD010, 0),
-                size=self.gtia.write_registers.get(0xD00B, 0),
-                color=self.gtia.write_registers.get(0xD015, 0),
+                xpos=wr[0xD003],
+                graphics=wr[0xD010],
+                size=wr[0xD00B],
+                color=wr[0xD015],
             )
             self.gtia.render_missiles(
-                xpos=[
-                    self.gtia.write_registers.get(0xD004, 0),
-                    self.gtia.write_registers.get(0xD005, 0),
-                    self.gtia.write_registers.get(0xD006, 0),
-                    self.gtia.write_registers.get(0xD007, 0),
-                ],
-                graphics=self.gtia.write_registers.get(0xD011, 0),
-                size_mask=self.gtia.write_registers.get(0xD00C, 0),
-                color=self.gtia.write_registers.get(0xD012, 0),
+                xpos=[wr[0xD004], wr[0xD005], wr[0xD006], wr[0xD007]],
+                graphics=wr[0xD011],
+                size_mask=wr[0xD00C],
+                color=wr[0xD012],
             )
             self.gtia.render_scanline(
                 self.antic.current_line,

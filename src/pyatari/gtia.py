@@ -11,6 +11,8 @@ from pyatari.constants import (
     CHACTLBits,
     GTIAReadRegister,
     GTIAWriteRegister,
+    OS_ROM_END,
+    OS_ROM_START,
     PM_SIZE_DOUBLE,
     PM_SIZE_QUAD,
     PORTBBits,
@@ -80,6 +82,10 @@ class GTIA:
         default_factory=lambda: [[0 for _ in range(DISPLAY_WIDTH)] for _ in range(4)]
     )
     _pm_any_active: bool = False
+    # Glyph-row cache: (chbase_page, glyph_row) → list of 128 pattern bytes.
+    # ROM is immutable so entries are never stale; custom RAM charsets bypass
+    # the cache and always fall back to read_byte.
+    _glyph_cache: dict[tuple[int, int], list[int]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         for register in GTIAWriteRegister:
@@ -184,7 +190,11 @@ class GTIA:
         cell_width: int,
         vertical_offset: int = 0,
     ) -> None:
-        chars = [self.memory.read_byte(line.screen_address + column) for column in range(columns)]
+        # Screen data: ANTIC DMA always reads from RAM, so bypass the full read_byte
+        # dispatch (handler check + ROM overlay) with a single bytearray slice.
+        scr_start = line.screen_address & 0xFFFF
+        chars = self.memory.ram[scr_start:scr_start + columns]
+
         glyph_row = (row + vertical_offset) % ANTIC_MODES[line.mode].scanlines_per_row
         if line.mode in {2, 3}:
             fg_color = self._hires_luminance_color()
@@ -209,18 +219,40 @@ class GTIA:
         fg = alt_fg if line.mode in {4, 5, 6, 7} else fg_color
         bg = alt_bg if line.mode in {4, 5, 6, 7} else bg_color
 
+        # Glyph data: pre-fetch all 128 pattern bytes for this glyph row in one
+        # pass to replace 40 read_byte calls (each carrying handler-dispatch overhead)
+        # with 128 direct memory subscripts + 40 list-index lookups.
+        #
+        # ROM charsets are cached across scanlines (ROM is immutable).
+        # RAM charsets are fetched fresh each scanline (data may change between rows).
+        chbase_page = (antic_chbase & 0xFF) << 8
+        os_rom = self.memory.os_rom
+        if os_rom is not None and OS_ROM_START <= chbase_page <= OS_ROM_END - 0x3FF:
+            cache_key = (chbase_page, glyph_row)
+            if cache_key not in self._glyph_cache:
+                base = chbase_page - OS_ROM_START + glyph_row
+                self._glyph_cache[cache_key] = [os_rom[base + c * 8] for c in range(128)]
+            glyph_patterns: list[int] = self._glyph_cache[cache_key]
+        else:
+            glyph_patterns = None
+
+        ram = self.memory.ram
         if subpixel_count == 1:
             for column, char_code in enumerate(chars):
-                glyph_address = ((antic_chbase & 0xFF) << 8) + ((char_code & 0x7F) * 8) + glyph_row
-                pattern = self.memory.read_byte(glyph_address)
+                if glyph_patterns is not None:
+                    pattern = glyph_patterns[char_code & 0x7F]
+                else:
+                    pattern = ram[(chbase_page + (char_code & 0x7F) * 8 + glyph_row) & 0xFFFF]
                 if char_code & 0x80:
                     pattern = 0 if antic_chactl & int(CHACTLBits.INVERSE) else pattern ^ 0xFF
                 base_x = column * 8
                 out_row[base_x:base_x + 8] = [fg if pattern & m else bg for m in _PIXEL_MASKS]
         else:
             for column, char_code in enumerate(chars):
-                glyph_address = ((antic_chbase & 0xFF) << 8) + ((char_code & 0x7F) * 8) + glyph_row
-                pattern = self.memory.read_byte(glyph_address)
+                if glyph_patterns is not None:
+                    pattern = glyph_patterns[char_code & 0x7F]
+                else:
+                    pattern = ram[(chbase_page + (char_code & 0x7F) * 8 + glyph_row) & 0xFFFF]
                 if char_code & 0x80:
                     pattern = 0 if antic_chactl & int(CHACTLBits.INVERSE) else pattern ^ 0xFF
                 base_x = column * 16
