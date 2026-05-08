@@ -12,6 +12,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "pytest-benchmark>=4.0",
     "pytest-cov",
     "mypy",
     "ruff",
@@ -30,8 +31,10 @@ packages = ["src/pyatari"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+python_files = ["test_*.py", "bench_*.py"]
 markers = [
     "slow: long-running validation tests such as the Klaus 6502 functional suite",
+    "benchmark: performance benchmarks",
 ]
 
 [tool.ruff]
