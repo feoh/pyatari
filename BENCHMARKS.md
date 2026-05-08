@@ -10,67 +10,55 @@ uv run python benchmarks/report.py benchmarks/results/<label>.json
 
 | Field | Value |
 |-------|-------|
-| Date | 2026-05-08T15:08:19.037632+00:00 |
+| Date | 2026-05-08T16:43:18.903529+00:00 |
 | CPU | Intel(R) Xeon(R) Processor @ 2.80GHz |
 | Python | 3.12.3 |
-| Git | claude/add-emulator-benchmarking-dGsPE @ b18cac47 |
+| Git | claude/add-emulator-benchmarking-dGsPE @ 79df1a96 |
 
 ## CPU
 
 | Benchmark | Mean | Std Dev | Min | Max | Rounds |
 |-----------|------|---------|-----|-----|--------|
-| `test_bench_cpu_step_nop` | 2.52 µs | 1.35 µs | 2.24 µs | 47.02 µs | 20046 |
-| `test_bench_cpu_step_lda_immediate` | 3.49 µs | 2.17 µs | 2.24 µs | 79.06 µs | 42125 |
-| `test_bench_cpu_step_sta_zeropage` | 3.69 µs | 2.25 µs | 2.24 µs | 93.47 µs | 46519 |
-| `test_bench_cpu_step_jmp_absolute` | 3.73 µs | 1.60 µs | 3.40 µs | 50.02 µs | 55963 |
-| `test_bench_cpu_step_branch_taken` | 3.78 µs | 1.95 µs | 3.31 µs | 166.66 µs | 75285 |
-| `test_bench_cpu_1000_steps` | 3.77 ms | 200.60 µs | 3.66 ms | 5.67 ms | 253 |
+| `test_bench_cpu_step_sta_zeropage` | 2.39 µs | 1.89 µs | 1.02 µs | 72.68 µs | 52179 |
+| `test_bench_cpu_step_lda_immediate` | 2.41 µs | 1.99 µs | 1.02 µs | 56.01 µs | 51664 |
+| `test_bench_cpu_step_jmp_absolute` | 2.67 µs | 1.67 µs | 2.36 µs | 55.40 µs | 57199 |
+| `test_bench_cpu_step_branch_taken` | 2.90 µs | 3.91 µs | 2.34 µs | 967.70 µs | 152300 |
+| `test_bench_cpu_step_nop` | 3.34 µs | 3.86 µs | 1.03 µs | 708.48 µs | 119589 |
+| `test_bench_cpu_1000_steps` | 1.96 ms | 68.67 µs | 1.89 ms | 3.27 ms | 504 |
 
 ## Memory Bus
 
 | Benchmark | Mean | Std Dev | Min | Max | Rounds |
 |-----------|------|---------|-----|-----|--------|
-| `test_bench_memory_read_ram` | 385.6 ns | 118.8 ns | 364.3 ns | 5.59 µs | 130702 |
-| `test_bench_memory_write_ram` | 413.3 ns | 125.6 ns | 388.3 ns | 4.82 µs | 124055 |
-| `test_bench_memory_read_word` | 833.7 ns | 599.6 ns | 769.9 ns | 140.38 µs | 62795 |
-| `test_bench_memory_read_hardware_register` | 918.2 ns | 2.29 µs | 621.0 ns | 64.72 µs | 91075 |
-| `test_bench_memory_write_hardware_register` | 946.8 ns | 2.26 µs | 644.0 ns | 145.42 µs | 190950 |
+| `test_bench_memory_read_ram` | 215.1 ns | 84.3 ns | 198.0 ns | 7.15 µs | 194326 |
+| `test_bench_memory_write_ram` | 348.3 ns | 122.3 ns | 323.0 ns | 5.26 µs | 146392 |
+| `test_bench_memory_read_word` | 471.5 ns | 1.35 µs | 419.4 ns | 320.94 µs | 110376 |
+| `test_bench_memory_write_hardware_register` | 533.9 ns | 225.1 ns | 482.7 ns | 16.14 µs | 92825 |
+| `test_bench_memory_read_hardware_register` | 841.0 ns | 4.94 µs | 525.0 ns | 1.54 ms | 135465 |
 
 ## Rendering (ANTIC/GTIA)
 
 | Benchmark | Mean | Std Dev | Min | Max | Rounds |
 |-----------|------|---------|-----|-----|--------|
-| `test_bench_antic_tick_one_cycle` | 298.5 ns | 115.5 ns | 276.2 ns | 21.93 µs | 194932 |
-| `test_bench_gtia_color_to_rgb` | 728.6 ns | 206.2 ns | 684.9 ns | 5.52 µs | 70963 |
-| `test_bench_antic_tick_scanline` | 6.01 µs | 2.50 µs | 5.29 µs | 103.98 µs | 59574 |
-| `test_bench_gtia_render_scanline_bitmap` | 200.16 µs | 15.94 µs | 187.05 µs | 521.58 µs | 4481 |
-| `test_bench_gtia_render_scanline_text` | 282.97 µs | 16.94 µs | 264.48 µs | 457.38 µs | 3042 |
-| `test_bench_gtia_render_full_frame` | 67.59 ms | 607.25 µs | 67.03 ms | 69.14 ms | 15 |
+| `test_bench_antic_tick_one_cycle` | 159.6 ns | 55.4 ns | 133.9 ns | 1.05 µs | 71814 |
+| `test_bench_gtia_color_to_rgb` | 632.0 ns | 1.22 µs | 576.7 ns | 343.78 µs | 83258 |
+| `test_bench_antic_tick_scanline` | 1.06 µs | 2.04 µs | 670.0 ns | 254.90 µs | 96312 |
+| `test_bench_gtia_render_scanline_bitmap` | 143.10 µs | 12.72 µs | 130.90 µs | 271.23 µs | 5084 |
+| `test_bench_gtia_render_scanline_text` | 216.37 µs | 22.49 µs | 199.51 µs | 460.76 µs | 4430 |
+| `test_bench_gtia_render_full_frame` | 53.33 ms | 581.38 µs | 52.55 ms | 54.88 ms | 19 |
 
 ## Full Machine / Frame
 
 | Benchmark | Mean | Std Dev | Min | Max | Rounds |
 |-----------|------|---------|-----|-----|--------|
-| `test_bench_machine_step` | 4.04 µs | 2.36 µs | 3.54 µs | 166.31 µs | 29710 |
-| `test_bench_machine_run_frame` | 56.93 ms (17.6 fps) | 154.28 µs | 56.66 ms | 57.37 ms | 18 |
-| `test_bench_machine_run_frame_with_audio` | 57.23 ms (17.5 fps) | 114.85 µs | 56.93 ms | 57.39 ms | 18 |
-| `test_bench_machine_10_frames` | 369.13 ms | 285.04 µs | 368.81 ms | 369.53 ms | 5 |
-| `test_bench_machine_run_frame_demo` | 1.198 s (0.8 fps) | 1.50 ms | 1.196 s | 1.200 s | 5 |
-
-## Input Handling
-
-| Benchmark | Mean | Std Dev | Min | Max | Rounds |
-|-----------|------|---------|-----|-----|--------|
-| `test_bench_set_joystick_neutral` | 332.0 ns | 134.2 ns | 310.2 ns | 30.86 µs | 154967 |
-| `test_bench_pokey_tick_scanline` | 418.7 ns | 114.5 ns | 398.7 ns | 3.93 µs | 121154 |
-| `test_bench_set_trigger` | 467.9 ns | 698.6 ns | 417.0 ns | 56.14 µs | 23761 |
-| `test_bench_release_key` | 501.5 ns | 1.04 µs | 439.0 ns | 160.12 µs | 96647 |
-| `test_bench_press_key_a` | 534.6 ns | 588.6 ns | 462.0 ns | 44.70 µs | 92894 |
-| `test_bench_set_joystick_direction` | 674.9 ns | 689.6 ns | 577.0 ns | 51.49 µs | 100151 |
-| `test_bench_pokey_generate_samples` | 500.52 µs | 13.70 µs | 483.21 µs | 707.89 µs | 1914 |
+| `test_bench_machine_step` | 2.29 µs | 1.61 µs | 1.89 µs | 54.12 µs | 17535 |
+| `test_bench_machine_run_frame` | 30.24 ms (33.1 fps) | 1.06 ms | 29.49 ms | 34.60 ms | 34 |
+| `test_bench_machine_run_frame_with_audio` | 30.55 ms (32.7 fps) | 524.72 µs | 30.20 ms | 31.98 ms | 32 |
+| `test_bench_machine_10_frames` | 223.78 ms | 5.01 ms | 219.45 ms | 231.77 ms | 5 |
+| `test_bench_machine_run_frame_demo` | 920.45 ms (1.1 fps) | 9.26 ms | 910.89 ms | 933.97 ms | 5 |
 
 ## Key Numbers
 
-- **Frame throughput (NOP sled):** 56.93 ms/frame = **17.6 fps** (real-time target: 60 fps)
-- **Frame throughput (demo screen):** 1.198 s/frame = **0.8 fps** (real-time target: 60 fps)
+- **Frame throughput (NOP sled):** 30.24 ms/frame = **33.1 fps** (real-time target: 60 fps)
+- **Frame throughput (demo screen):** 920.45 ms/frame = **1.1 fps** (real-time target: 60 fps)
 

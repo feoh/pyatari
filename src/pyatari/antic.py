@@ -154,12 +154,14 @@ class ANTIC:
             return
 
     def tick(self, cycles: int, *, trigger_nmi: bool = True) -> list[str]:
+        end = self.cycles_into_scanline + cycles
+        if end < CYCLES_PER_SCANLINE:
+            self.cycles_into_scanline = end
+            return []
+        scanlines, self.cycles_into_scanline = divmod(end, CYCLES_PER_SCANLINE)
         events: list[str] = []
-        for _ in range(cycles):
-            self.cycles_into_scanline += 1
-            if self.cycles_into_scanline >= CYCLES_PER_SCANLINE:
-                self.cycles_into_scanline = 0
-                events.extend(self._advance_scanline(trigger_nmi=trigger_nmi))
+        for _ in range(scanlines):
+            events.extend(self._advance_scanline(trigger_nmi=trigger_nmi))
         return events
 
     def consume_wsync(self) -> bool:
