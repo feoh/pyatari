@@ -40,6 +40,25 @@ GTIA_HUE_RGB = {
 }
 
 
+def _build_color_table() -> list[int]:
+    """Pre-compute all 256 Atari color register values to packed RGB ints."""
+    result = []
+    for value in range(256):
+        hue = (value >> 4) & 0x0F
+        luminance = value & 0x0E
+        brightness = sqrt(luminance / 14.0)
+        if hue == 0:
+            gray = int(255 * brightness)
+            result.append((gray << 16) | (gray << 8) | gray)
+        else:
+            r, g, b = GTIA_HUE_RGB[hue]
+            result.append((int(r * brightness) << 16) | (int(g * brightness) << 8) | int(b * brightness))
+    return result
+
+
+_COLOR_TABLE: list[int] = _build_color_table()
+
+
 @dataclass(slots=True)
 class GTIA:
     """Minimal GTIA model focused on color registers and text-mode scanlines."""
@@ -104,19 +123,7 @@ class GTIA:
                 row[x] = background
 
     def color_to_rgb(self, value: int) -> int:
-        value &= 0xFF
-        hue = (value >> 4) & 0x0F
-        luminance = value & 0x0E
-        brightness = sqrt(luminance / 14.0)
-        if hue == 0:
-            gray = int(255 * brightness)
-            return (gray << 16) | (gray << 8) | gray
-
-        base_red, base_green, base_blue = GTIA_HUE_RGB[hue]
-        red = int(base_red * brightness)
-        green = int(base_green * brightness)
-        blue = int(base_blue * brightness)
-        return (red << 16) | (green << 8) | blue
+        return _COLOR_TABLE[value & 0xFF]
 
     def render_scanline(
         self,
@@ -185,13 +192,16 @@ class GTIA:
         else:
             glyph_row %= 8
 
+        # Hoist per-scanline constants out of the per-character and per-bit loops.
+        # cell_width is always 8 or 16, so subpixel_count is always 1 or 2 (never 0).
+        subpixel_count = cell_width // 8
+        fg = alt_fg if line.mode in {4, 5, 6, 7} else fg_color
+        bg = alt_bg if line.mode in {4, 5, 6, 7} else bg_color
+
         for column, char_code in enumerate(chars):
             glyph_address = ((antic_chbase & 0xFF) << 8) + ((char_code & 0x7F) * 8) + glyph_row
             pattern = self.memory.read_byte(glyph_address)
-            inverse = bool(char_code & 0x80)
-            fg = alt_fg if line.mode in {4, 5, 6, 7} else fg_color
-            bg = alt_bg if line.mode in {4, 5, 6, 7} else bg_color
-            if inverse:
+            if char_code & 0x80:
                 if antic_chactl & int(CHACTLBits.INVERSE):
                     pattern = 0
                 else:
@@ -199,9 +209,8 @@ class GTIA:
             base_x = column * cell_width
             for bit in range(8):
                 pixel = fg if pattern & (0x80 >> bit) else bg
-                x = base_x + bit * (cell_width // 8)
-                repeat = max(1, cell_width // 8)
-                for subpixel in range(repeat):
+                x = base_x + bit * subpixel_count
+                for subpixel in range(subpixel_count):
                     if x + subpixel < DISPLAY_WIDTH:
                         out_row[x + subpixel] = pixel
 
@@ -283,18 +292,19 @@ class GTIA:
 
     def _overlay_player_missile_graphics(self, row: int) -> None:
         out_row = self.framebuffer[row]
+        bg_color = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLBK)])
         for missile in range(4):
             missile_row = self.missile_dma[missile]
             for x, pixel in enumerate(missile_row):
                 if pixel:
-                    if out_row[x] != self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLBK)]):
+                    if out_row[x] != bg_color:
                         self.read_registers[int(GTIAReadRegister.M0PF) + missile] = 0x0F
                     out_row[x] = pixel
         for player in range(4):
             player_row = self.player_dma[player]
             for x, pixel in enumerate(player_row):
                 if pixel:
-                    if out_row[x] != self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLBK)]):
+                    if out_row[x] != bg_color:
                         self.read_registers[int(GTIAReadRegister.P0PF) + player] = 0x0F
                     for other in range(4):
                         if other != player and self.player_dma[other][x]:

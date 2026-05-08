@@ -32,3 +32,4 @@ record rather than a template exercise.
 
 - [0001-real-rom-boot-without-synthetic-shell](./0001-real-rom-boot-without-synthetic-shell.md)
 - [0002-performance-benchmarking-and-hot-path-optimizations](./0002-performance-benchmarking-and-hot-path-optimizations.md)
+- [0003-gtia-rendering-hot-path-optimizations](./0003-gtia-rendering-hot-path-optimizations.md)
