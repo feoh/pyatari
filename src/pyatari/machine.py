@@ -439,6 +439,7 @@ class Machine:
     def _render_visible_scanlines(self) -> None:
         row = self.antic.scanline - 1
         if self.antic.current_line is not None and 0 <= row < self.display.height:
+            self.gtia.begin_scanline_render()
             self.gtia.render_player(
                 0,
                 xpos=self.gtia.write_registers.get(0xD000, 0),

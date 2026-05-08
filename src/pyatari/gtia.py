@@ -58,6 +58,10 @@ def _build_color_table() -> list[int]:
 
 _COLOR_TABLE: list[int] = _build_color_table()
 
+# Pre-computed pixel bit masks and zero-row sentinel used by hot render paths.
+_PIXEL_MASKS: tuple[int, ...] = (0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01)
+_ZERO_ROW: tuple[int, ...] = (0,) * DISPLAY_WIDTH
+
 
 @dataclass(slots=True)
 class GTIA:
@@ -75,6 +79,7 @@ class GTIA:
     missile_dma: list[list[int]] = field(
         default_factory=lambda: [[0 for _ in range(DISPLAY_WIDTH)] for _ in range(4)]
     )
+    _pm_any_active: bool = False
 
     def __post_init__(self) -> None:
         for register in GTIAWriteRegister:
@@ -95,6 +100,10 @@ class GTIA:
         self._reset_input_registers()
         self.clear_framebuffer()
         self._clear_pm_buffers()
+
+    def begin_scanline_render(self) -> None:
+        """Reset the P/M active flag before rendering each scanline's sprites."""
+        self._pm_any_active = False
 
     def read_register(self, address: int) -> int:
         register = self._normalize(address)
@@ -194,27 +203,30 @@ class GTIA:
 
         # Hoist per-scanline constants out of the per-character and per-bit loops.
         # cell_width is always 8 or 16, so subpixel_count is always 1 or 2 (never 0).
+        # All text modes produce columns*cell_width == 320 <= DISPLAY_WIDTH (384),
+        # so no per-pixel bounds check is needed.
         subpixel_count = cell_width // 8
         fg = alt_fg if line.mode in {4, 5, 6, 7} else fg_color
         bg = alt_bg if line.mode in {4, 5, 6, 7} else bg_color
 
-        for column, char_code in enumerate(chars):
-            glyph_address = ((antic_chbase & 0xFF) << 8) + ((char_code & 0x7F) * 8) + glyph_row
-            pattern = self.memory.read_byte(glyph_address)
-            if char_code & 0x80:
-                if antic_chactl & int(CHACTLBits.INVERSE):
-                    pattern = 0
-                else:
-                    pattern ^= 0xFF
-            base_x = column * cell_width
-            for bit in range(8):
-                pixel = fg if pattern & (0x80 >> bit) else bg
-                x = base_x + bit * subpixel_count
-                for subpixel in range(subpixel_count):
-                    if x + subpixel < DISPLAY_WIDTH:
-                        out_row[x + subpixel] = pixel
+        if subpixel_count == 1:
+            for column, char_code in enumerate(chars):
+                glyph_address = ((antic_chbase & 0xFF) << 8) + ((char_code & 0x7F) * 8) + glyph_row
+                pattern = self.memory.read_byte(glyph_address)
+                if char_code & 0x80:
+                    pattern = 0 if antic_chactl & int(CHACTLBits.INVERSE) else pattern ^ 0xFF
+                base_x = column * 8
+                out_row[base_x:base_x + 8] = [fg if pattern & m else bg for m in _PIXEL_MASKS]
+        else:
+            for column, char_code in enumerate(chars):
+                glyph_address = ((antic_chbase & 0xFF) << 8) + ((char_code & 0x7F) * 8) + glyph_row
+                pattern = self.memory.read_byte(glyph_address)
+                if char_code & 0x80:
+                    pattern = 0 if antic_chactl & int(CHACTLBits.INVERSE) else pattern ^ 0xFF
+                base_x = column * 16
+                out_row[base_x:base_x + 16] = [c for m in _PIXEL_MASKS for c in (fg if pattern & m else bg,) * 2]
 
-        fill_from = min(DISPLAY_WIDTH, columns * cell_width)
+        fill_from = columns * cell_width
         for x in range(fill_from, DISPLAY_WIDTH):
             out_row[x] = bg_color
 
@@ -265,7 +277,11 @@ class GTIA:
             x += 1
 
     def render_player(self, player: int, *, xpos: int, graphics: int, size: int, color: int) -> None:
-        self.player_dma[player] = [0 for _ in range(DISPLAY_WIDTH)]
+        player_row = self.player_dma[player]
+        player_row[:] = _ZERO_ROW
+        if not graphics:
+            return
+        self._pm_any_active = True
         width = self._pm_size_multiplier(size)
         color_rgb = self.color_to_rgb(color)
         for bit in range(8):
@@ -275,22 +291,28 @@ class GTIA:
             for offset in range(width):
                 x = start + offset
                 if 0 <= x < DISPLAY_WIDTH:
-                    self.player_dma[player][x] = color_rgb
+                    player_row[x] = color_rgb
 
     def render_missiles(self, *, xpos: list[int], graphics: int, size_mask: int, color: int) -> None:
         for missile in range(4):
-            self.missile_dma[missile] = [0 for _ in range(DISPLAY_WIDTH)]
+            self.missile_dma[missile][:] = _ZERO_ROW
+        if not (graphics & 0x0F):
+            return
+        self._pm_any_active = True
+        color_rgb = self.color_to_rgb(color)
+        for missile in range(4):
             if not (graphics & (1 << missile)):
                 continue
             width_code = (size_mask >> (missile * 2)) & 0x03
             width = self._pm_size_multiplier(width_code) * 2
-            color_rgb = self.color_to_rgb(color)
             for offset in range(width):
                 x = xpos[missile] + offset
                 if 0 <= x < DISPLAY_WIDTH:
                     self.missile_dma[missile][x] = color_rgb
 
     def _overlay_player_missile_graphics(self, row: int) -> None:
+        if not self._pm_any_active:
+            return
         out_row = self.framebuffer[row]
         bg_color = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLBK)])
         for missile in range(4):
@@ -326,9 +348,10 @@ class GTIA:
         self.read_registers[int(GTIAReadRegister.CONSOL)] = consol
 
     def _clear_pm_buffers(self) -> None:
-        for player in range(4):
-            self.player_dma[player] = [0 for _ in range(DISPLAY_WIDTH)]
-            self.missile_dma[player] = [0 for _ in range(DISPLAY_WIDTH)]
+        for i in range(4):
+            self.player_dma[i][:] = _ZERO_ROW
+            self.missile_dma[i][:] = _ZERO_ROW
+        self._pm_any_active = False
 
     def _pm_size_multiplier(self, size: int) -> int:
         if size == PM_SIZE_DOUBLE:
