@@ -82,6 +82,11 @@ class GTIA:
         default_factory=lambda: [[0 for _ in range(DISPLAY_WIDTH)] for _ in range(4)]
     )
     _pm_any_active: bool = False
+    # Per-player and per-missile dirty flags: True means the DMA buffer was
+    # written last scanline and must be cleared before the next render.
+    # Avoids clearing 384-element buffers every scanline when sprites are inactive.
+    _player_dirty: list[bool] = field(default_factory=lambda: [False, False, False, False])
+    _missiles_dirty: bool = False
     # Glyph-row cache: (chbase_page, glyph_row) → list of 128 pattern bytes.
     # ROM is immutable so entries are never stale; custom RAM charsets bypass
     # the cache and always fall back to read_byte.
@@ -236,6 +241,13 @@ class GTIA:
         else:
             glyph_patterns = None
 
+        # Per-scanline pixel cache indexed by pattern byte (0–255).
+        # fg and bg are constant for the entire scanline, so identical pattern
+        # bytes (most commonly 0x00 for space characters) share one list
+        # instead of creating a new one for every character column.
+        # A 256-element list gives O(1) direct array access with no hashing,
+        # faster than dict.get() for the 40-lookup-per-scanline hot path.
+        pixel_cache: list[list[int] | None] = [None] * 256
         ram = self.memory.ram
         if subpixel_count == 1:
             for column, char_code in enumerate(chars):
@@ -245,8 +257,10 @@ class GTIA:
                     pattern = ram[(chbase_page + (char_code & 0x7F) * 8 + glyph_row) & 0xFFFF]
                 if char_code & 0x80:
                     pattern = 0 if antic_chactl & int(CHACTLBits.INVERSE) else pattern ^ 0xFF
-                base_x = column * 8
-                out_row[base_x:base_x + 8] = [fg if pattern & m else bg for m in _PIXEL_MASKS]
+                pixels = pixel_cache[pattern]
+                if pixels is None:
+                    pixel_cache[pattern] = pixels = [fg if pattern & m else bg for m in _PIXEL_MASKS]
+                out_row[column * 8:column * 8 + 8] = pixels
         else:
             for column, char_code in enumerate(chars):
                 if glyph_patterns is not None:
@@ -255,12 +269,13 @@ class GTIA:
                     pattern = ram[(chbase_page + (char_code & 0x7F) * 8 + glyph_row) & 0xFFFF]
                 if char_code & 0x80:
                     pattern = 0 if antic_chactl & int(CHACTLBits.INVERSE) else pattern ^ 0xFF
-                base_x = column * 16
-                out_row[base_x:base_x + 16] = [c for m in _PIXEL_MASKS for c in (fg if pattern & m else bg,) * 2]
+                pixels = pixel_cache[pattern]
+                if pixels is None:
+                    pixel_cache[pattern] = pixels = [c for m in _PIXEL_MASKS for c in (fg if pattern & m else bg,) * 2]
+                out_row[column * 16:column * 16 + 16] = pixels
 
         fill_from = columns * cell_width
-        for x in range(fill_from, DISPLAY_WIDTH):
-            out_row[x] = bg_color
+        self.framebuffer[row][fill_from:DISPLAY_WIDTH] = [bg_color] * (DISPLAY_WIDTH - fill_from)
 
     def _render_bitmap_mode(self, line: DisplayListLine, *, row: int, vertical_offset: int = 0) -> None:
         mode_info = ANTIC_MODES[line.mode]
@@ -310,9 +325,12 @@ class GTIA:
 
     def render_player(self, player: int, *, xpos: int, graphics: int, size: int, color: int) -> None:
         player_row = self.player_dma[player]
-        player_row[:] = _ZERO_ROW
+        if self._player_dirty[player]:
+            player_row[:] = _ZERO_ROW
+            self._player_dirty[player] = False
         if not graphics:
             return
+        self._player_dirty[player] = True
         self._pm_any_active = True
         width = self._pm_size_multiplier(size)
         color_rgb = self.color_to_rgb(color)
@@ -326,10 +344,13 @@ class GTIA:
                     player_row[x] = color_rgb
 
     def render_missiles(self, *, xpos: list[int], graphics: int, size_mask: int, color: int) -> None:
-        for missile in range(4):
-            self.missile_dma[missile][:] = _ZERO_ROW
+        if self._missiles_dirty:
+            for missile in range(4):
+                self.missile_dma[missile][:] = _ZERO_ROW
+            self._missiles_dirty = False
         if not (graphics & 0x0F):
             return
+        self._missiles_dirty = True
         self._pm_any_active = True
         color_rgb = self.color_to_rgb(color)
         for missile in range(4):
@@ -384,6 +405,8 @@ class GTIA:
             self.player_dma[i][:] = _ZERO_ROW
             self.missile_dma[i][:] = _ZERO_ROW
         self._pm_any_active = False
+        self._player_dirty[:] = [False, False, False, False]
+        self._missiles_dirty = False
 
     def _pm_size_multiplier(self, size: int) -> int:
         if size == PM_SIZE_DOUBLE:
@@ -420,10 +443,7 @@ class GTIA:
             self.read_registers[register] = 0x00
 
     def _fill_row(self, row: int, color_value: int) -> None:
-        color = self.color_to_rgb(color_value)
-        out_row = self.framebuffer[row]
-        for x in range(DISPLAY_WIDTH):
-            out_row[x] = color
+        self.framebuffer[row][:] = [self.color_to_rgb(color_value)] * DISPLAY_WIDTH
 
     def _hires_luminance_color(self) -> int:
         pf2 = self.write_registers[int(GTIAWriteRegister.COLPF2)]

@@ -35,3 +35,4 @@ record rather than a template exercise.
 - [0003-gtia-rendering-hot-path-optimizations](./0003-gtia-rendering-hot-path-optimizations.md)
 - [0004-player-missile-and-text-mode-rendering-optimizations](./0004-player-missile-and-text-mode-rendering-optimizations.md)
 - [0005-text-mode-memory-access-optimizations](./0005-text-mode-memory-access-optimizations.md)
+- [0006-pm-dirty-flags-fill-row-rom-check-pixel-cache](./0006-pm-dirty-flags-fill-row-rom-check-pixel-cache.md)

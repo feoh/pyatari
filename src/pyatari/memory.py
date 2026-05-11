@@ -178,7 +178,7 @@ class MemoryBus:
             if self.self_test_rom is not None:
                 return self.self_test_rom[address - SELF_TEST_START]
 
-        if self._os_rom_enabled() and self.os_rom is not None:
+        if self.os_rom is not None and self._os_rom_enabled():
             if OS_ROM_LOWER_START <= address <= OS_ROM_LOWER_END:
                 return self.os_rom[address - OS_ROM_START]
             if OS_ROM_UPPER_START <= address <= OS_ROM_UPPER_END:
@@ -193,7 +193,7 @@ class MemoryBus:
         if SELF_TEST_START <= address <= SELF_TEST_END and self._self_test_enabled():
             return self.self_test_rom is not None
 
-        if self._os_rom_enabled() and self.os_rom is not None:
+        if self.os_rom is not None and self._os_rom_enabled():
             if OS_ROM_LOWER_START <= address <= OS_ROM_LOWER_END:
                 return True
             if OS_ROM_UPPER_START <= address <= OS_ROM_UPPER_END:
