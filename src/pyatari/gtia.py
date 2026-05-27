@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from math import sqrt
 
+import numpy as np
+
 from pyatari.antic import DisplayListLine
 from pyatari.constants import (
     ANTIC_MODES,
@@ -60,8 +62,11 @@ def _build_color_table() -> list[int]:
 
 _COLOR_TABLE: list[int] = _build_color_table()
 
-# Pre-computed pixel bit masks and zero-row sentinel used by hot render paths.
+# Bit masks for pixel extraction — plain tuple for pixel cache, numpy for bitmap mode.
 _PIXEL_MASKS: tuple[int, ...] = (0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01)
+_BIT_MASKS_NP = np.array(_PIXEL_MASKS, dtype=np.uint8)
+
+# Sentinel used to clear player/missile DMA buffers in-place via slice assignment.
 _ZERO_ROW: tuple[int, ...] = (0,) * DISPLAY_WIDTH
 
 
@@ -72,8 +77,8 @@ class GTIA:
     memory: MemoryBus
     write_registers: dict[int, int] = field(default_factory=dict)
     read_registers: dict[int, int] = field(default_factory=dict)
-    framebuffer: list[list[int]] = field(
-        default_factory=lambda: [[0 for _ in range(DISPLAY_WIDTH)] for _ in range(DISPLAY_HEIGHT)]
+    framebuffer: np.ndarray = field(
+        default_factory=lambda: np.zeros((DISPLAY_HEIGHT, DISPLAY_WIDTH), dtype=np.uint32)
     )
     player_dma: list[list[int]] = field(
         default_factory=lambda: [[0 for _ in range(DISPLAY_WIDTH)] for _ in range(4)]
@@ -136,11 +141,7 @@ class GTIA:
             self.write_registers[register] = value
 
     def clear_framebuffer(self) -> None:
-        background = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLBK)])
-        for y in range(DISPLAY_HEIGHT):
-            row = self.framebuffer[y]
-            for x in range(DISPLAY_WIDTH):
-                row[x] = background
+        self.framebuffer[:] = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLBK)])
 
     def color_to_rgb(self, value: int) -> int:
         return _COLOR_TABLE[value & 0xFF]
@@ -195,8 +196,7 @@ class GTIA:
         cell_width: int,
         vertical_offset: int = 0,
     ) -> None:
-        # Screen data: ANTIC DMA always reads from RAM, so bypass the full read_byte
-        # dispatch (handler check + ROM overlay) with a single bytearray slice.
+        # Screen data: ANTIC DMA always reads from RAM, bypassing read_byte dispatch.
         scr_start = line.screen_address & 0xFFFF
         chars = self.memory.ram[scr_start:scr_start + columns]
 
@@ -209,27 +209,18 @@ class GTIA:
             bg_color = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLBK)])
         alt_fg = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLPF2)])
         alt_bg = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLPF0)])
-        out_row = self.framebuffer[row]
 
         if antic_chactl & int(CHACTLBits.REFLECT):
             glyph_row = 7 - (glyph_row % 8)
         else:
             glyph_row %= 8
 
-        # Hoist per-scanline constants out of the per-character and per-bit loops.
-        # cell_width is always 8 or 16, so subpixel_count is always 1 or 2 (never 0).
-        # All text modes produce columns*cell_width == 320 <= DISPLAY_WIDTH (384),
-        # so no per-pixel bounds check is needed.
         subpixel_count = cell_width // 8
         fg = alt_fg if line.mode in {4, 5, 6, 7} else fg_color
         bg = alt_bg if line.mode in {4, 5, 6, 7} else bg_color
 
-        # Glyph data: pre-fetch all 128 pattern bytes for this glyph row in one
-        # pass to replace 40 read_byte calls (each carrying handler-dispatch overhead)
-        # with 128 direct memory subscripts + 40 list-index lookups.
-        #
-        # ROM charsets are cached across scanlines (ROM is immutable).
-        # RAM charsets are fetched fresh each scanline (data may change between rows).
+        # Glyph data: ROM charsets are cached across scanlines (immutable).
+        # RAM charsets are re-fetched each call (data may change).
         chbase_page = (antic_chbase & 0xFF) << 8
         os_rom = self.memory.os_rom
         if os_rom is not None and OS_ROM_START <= chbase_page <= OS_ROM_END - 0x3FF:
@@ -237,18 +228,18 @@ class GTIA:
             if cache_key not in self._glyph_cache:
                 base = chbase_page - OS_ROM_START + glyph_row
                 self._glyph_cache[cache_key] = [os_rom[base + c * 8] for c in range(128)]
-            glyph_patterns: list[int] = self._glyph_cache[cache_key]
+            glyph_patterns: list[int] | None = self._glyph_cache[cache_key]
         else:
             glyph_patterns = None
 
-        # Per-scanline pixel cache indexed by pattern byte (0–255).
-        # fg and bg are constant for the entire scanline, so identical pattern
-        # bytes (most commonly 0x00 for space characters) share one list
-        # instead of creating a new one for every character column.
-        # A 256-element list gives O(1) direct array access with no hashing,
-        # faster than dict.get() for the 40-lookup-per-scanline hot path.
+        # Build the row into a Python list for fast per-pixel cache access, then
+        # commit to the numpy framebuffer in a single slice assignment.
+        # Per-scanline pixel cache: 256-element list indexed by pattern byte.
+        # fg and bg are constant per scanline, so repeated patterns (especially
+        # 0x00 for spaces) reuse one list instead of allocating a new one per column.
         pixel_cache: list[list[int] | None] = [None] * 256
         ram = self.memory.ram
+        out_row: list[int] = [bg_color] * DISPLAY_WIDTH
         if subpixel_count == 1:
             for column, char_code in enumerate(chars):
                 if glyph_patterns is not None:
@@ -274,15 +265,15 @@ class GTIA:
                     pixel_cache[pattern] = pixels = [c for m in _PIXEL_MASKS for c in (fg if pattern & m else bg,) * 2]
                 out_row[column * 16:column * 16 + 16] = pixels
 
-        fill_from = columns * cell_width
-        self.framebuffer[row][fill_from:DISPLAY_WIDTH] = [bg_color] * (DISPLAY_WIDTH - fill_from)
+        # Single numpy assignment commits the fully-built row; cheaper than
+        # writing to the numpy array 40 times inside the inner loop.
+        self.framebuffer[row] = out_row
 
     def _render_bitmap_mode(self, line: DisplayListLine, *, row: int, vertical_offset: int = 0) -> None:
         mode_info = ANTIC_MODES[line.mode]
         row_block = vertical_offset // max(1, mode_info.scanlines_per_row)
         base_address = (line.screen_address + (row_block * mode_info.bytes_per_line)) & 0xFFFF
         data = [self.memory.read_byte(base_address + index) for index in range(mode_info.bytes_per_line)]
-        out_row = self.framebuffer[row]
         colors = [
             self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLBK)]),
             self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLPF0)]),
@@ -309,19 +300,13 @@ class GTIA:
             self._fill_row(row, self.write_registers[int(GTIAWriteRegister.COLBK)])
             return
 
-        repeat = max(1, DISPLAY_WIDTH // max(1, len(pixels)))
-        x = 0
-        for pixel in pixels:
-            for _ in range(repeat):
-                if x >= DISPLAY_WIDTH:
-                    break
-                out_row[x] = pixel
-                x += 1
-            if x >= DISPLAY_WIDTH:
-                break
-        while x < DISPLAY_WIDTH:
-            out_row[x] = colors[0]
-            x += 1
+        if pixels:
+            repeat = max(1, DISPLAY_WIDTH // max(1, len(pixels)))
+            expanded = np.repeat(np.array(pixels, dtype=np.uint32), repeat)
+            n = min(len(expanded), DISPLAY_WIDTH)
+            self.framebuffer[row, :n] = expanded[:n]
+            if n < DISPLAY_WIDTH:
+                self.framebuffer[row, n:] = colors[0]
 
     def render_player(self, player: int, *, xpos: int, graphics: int, size: int, color: int) -> None:
         player_row = self.player_dma[player]
@@ -425,11 +410,9 @@ class GTIA:
         if offset <= 0:
             return
         bg = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLBK)])
-        out_row = self.framebuffer[row]
-        shifted = [bg] * DISPLAY_WIDTH
-        for x in range(offset, DISPLAY_WIDTH):
-            shifted[x] = out_row[x - offset]
-        self.framebuffer[row] = shifted
+        src = self.framebuffer[row].copy()  # copy before in-place modification
+        self.framebuffer[row, :offset] = bg
+        self.framebuffer[row, offset:] = src[:DISPLAY_WIDTH - offset]
 
     def _reset_input_registers(self) -> None:
         self._clear_collision_registers()
@@ -443,7 +426,7 @@ class GTIA:
             self.read_registers[register] = 0x00
 
     def _fill_row(self, row: int, color_value: int) -> None:
-        self.framebuffer[row][:] = [self.color_to_rgb(color_value)] * DISPLAY_WIDTH
+        self.framebuffer[row] = self.color_to_rgb(color_value)
 
     def _hires_luminance_color(self) -> int:
         pf2 = self.write_registers[int(GTIAWriteRegister.COLPF2)]

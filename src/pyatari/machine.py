@@ -235,7 +235,7 @@ class Machine:
         if self.antic.consume_wsync():
             remaining = (-self.antic.cycles_into_scanline) % CYCLES_PER_SCANLINE
             if remaining:
-                self.clock.tick(remaining)
+                self.clock.total_cycles += remaining
                 events = self.antic.tick(remaining)
                 if self.pokey.tick(remaining):
                     self.cpu.irq()
@@ -245,7 +245,7 @@ class Machine:
         before = self.cpu.cycles
         opcode = self.cpu.step()
         elapsed = self.cpu.cycles - before
-        self.clock.tick(elapsed)
+        self.clock.total_cycles += elapsed  # inlined clock.tick() — avoids a function call per step
         events = self.antic.tick(elapsed)
         if self.pokey.tick(elapsed):
             self.cpu.irq()

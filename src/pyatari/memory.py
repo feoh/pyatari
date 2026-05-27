@@ -2,7 +2,13 @@
 
 This module models the machine's 64KB address space, including RAM, ROM
 overlays, hardware register dispatch, and the memory banking controlled by PIA
-PORTB. The implementation favors clarity over micro-optimizations.
+PORTB.
+
+Handler dispatch uses 65536-element lists rather than dicts so that
+``read_byte``/``write_byte`` can resolve a handler with a direct list
+subscript (O(1), no hashing) instead of a dict lookup.  For addresses below
+``SELF_TEST_START`` (0x5000) ROM-overlay checks are skipped entirely because
+no ROM region exists there.
 """
 
 from __future__ import annotations
@@ -65,8 +71,10 @@ class MemoryBus:
             | PORTBBits.SELF_TEST_ENABLE
         )
 
-        self._read_handlers: dict[int, ReadHandler] = {}
-        self._write_handlers: dict[int, WriteHandler] = {}
+        # 65536-element lists for O(1) direct array subscript instead of dict hash lookup.
+        # None means no handler registered; direct RAM read/write applies.
+        self._read_handler_table: list[ReadHandler | None] = [None] * 0x10000
+        self._write_handler_table: list[WriteHandler | None] = [None] * 0x10000
 
     def reset(self) -> None:
         """Clear RAM, preserving currently loaded ROM images."""
@@ -93,47 +101,45 @@ class MemoryBus:
 
     def register_read_handler(self, start: int, end: int, handler: ReadHandler) -> None:
         for address in range(start, end + 1):
-            self._read_handlers[address] = handler
+            self._read_handler_table[address] = handler
 
     def register_write_handler(self, start: int, end: int, handler: WriteHandler) -> None:
         for address in range(start, end + 1):
-            self._write_handlers[address] = handler
+            self._write_handler_table[address] = handler
 
     def unregister_read_handler(self, start: int, end: int) -> None:
         for address in range(start, end + 1):
-            self._read_handlers.pop(address, None)
+            self._read_handler_table[address] = None
 
     def unregister_write_handler(self, start: int, end: int) -> None:
         for address in range(start, end + 1):
-            self._write_handlers.pop(address, None)
+            self._write_handler_table[address] = None
 
     def update_bank_config(self, portb_value: int) -> None:
         self.portb = portb_value & 0xFF
 
     def read_byte(self, address: int) -> int:
         address &= 0xFFFF
-
-        if address in self._read_handlers:
-            return self._read_handlers[address](address) & 0xFF
-
+        handler = self._read_handler_table[address]
+        if handler is not None:
+            return handler(address) & 0xFF
+        if address < 0x5000:
+            return self.ram[address]
         rom_value = self._read_rom_overlay(address)
-        if rom_value is not None:
-            return rom_value
-
-        return self.ram[address]
+        return rom_value if rom_value is not None else self.ram[address]
 
     def write_byte(self, address: int, value: int) -> None:
         address &= 0xFFFF
         value &= 0xFF
-
-        if address in self._write_handlers:
-            self._write_handlers[address](address, value)
+        handler = self._write_handler_table[address]
+        if handler is not None:
+            handler(address, value)
             return
-
-        if self._is_rom_address(address):
+        if address < 0x5000:
+            self.ram[address] = value
             return
-
-        self.ram[address] = value
+        if not self._is_rom_address(address):
+            self.ram[address] = value
 
     def read_word(self, address: int) -> int:
         low = self.read_byte(address)
