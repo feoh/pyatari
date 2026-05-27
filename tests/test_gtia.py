@@ -218,3 +218,54 @@ def test_machine_installs_gtia_handlers_and_renders_visible_line():
     assert machine.memory.read_byte(int(GTIAWriteRegister.COLPF1)) == 0x0E
     assert machine.gtia.framebuffer[0][0] == machine.gtia.color_to_rgb(0x0E)
     assert machine.gtia.framebuffer[0][8] == machine.gtia.color_to_rgb(0x3A)
+
+
+def test_render_scanline_with_os_rom_charset_uses_glyph_cache():
+    """Glyph cache for OS ROM charset produces correct pixels from ROM data."""
+    os_rom = bytearray(0x4000)
+    # Char 0x41 at ROM offset 0x2000 + 0x41*8 = 0x2208 (CPU address 0xE208)
+    # Row 0: alternating bits 0xAA = 10101010
+    os_rom[0x2000 + 0x41 * 8 + 0] = 0xAA
+    # Row 1: all bits set 0xFF
+    os_rom[0x2000 + 0x41 * 8 + 1] = 0xFF
+    # All other chars and rows: 0x00
+
+    memory = MemoryBus()
+    memory.load_os_rom(bytes(os_rom))
+    memory.ram[0x9C40] = 0x41  # char 0x41 at screen column 0
+    memory.ram[0x9C41] = 0x00  # space at column 1
+
+    gtia = GTIA(memory=memory)
+    gtia.write_register(int(GTIAWriteRegister.COLPF1), 0x0E)
+    gtia.write_register(int(GTIAWriteRegister.COLPF2), 0x00)
+
+    line = DisplayListLine(
+        instruction_address=0x9C20, instruction=0x42, mode=2,
+        scanlines=8, screen_address=0x9C40,
+    )
+
+    # Row 0: pattern 0xAA = 10101010
+    gtia.render_scanline(line, row=0, antic_chbase=0xE0)
+    fg = gtia.color_to_rgb((0x00 & 0xF0) | (0x0E & 0x0E))  # hires luminance for mode 2
+    bg = gtia.color_to_rgb(0x00)
+    assert gtia.framebuffer[0][0] == fg   # bit 7 set
+    assert gtia.framebuffer[0][1] == bg   # bit 6 clear
+    assert gtia.framebuffer[0][2] == fg   # bit 5 set
+    assert gtia.framebuffer[0][3] == bg   # bit 4 clear
+    assert gtia.framebuffer[0][4] == fg   # bit 3 set
+    assert gtia.framebuffer[0][5] == bg   # bit 2 clear
+    assert gtia.framebuffer[0][6] == fg   # bit 1 set
+    assert gtia.framebuffer[0][7] == bg   # bit 0 clear
+    # space char → all bg
+    for x in range(8, 16):
+        assert gtia.framebuffer[0][x] == bg
+
+    # Row 1: pattern 0xFF → all pixels fg
+    gtia.render_scanline(line, row=1, antic_chbase=0xE0)
+    for x in range(8):
+        assert gtia.framebuffer[1][x] == fg
+
+    # Row 2: pattern 0x00 → all pixels bg
+    gtia.render_scanline(line, row=2, antic_chbase=0xE0)
+    for x in range(8):
+        assert gtia.framebuffer[2][x] == bg

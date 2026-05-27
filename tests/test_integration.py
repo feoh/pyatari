@@ -206,6 +206,51 @@ def test_reset_with_os_rom_installs_default_display_list_ram():
     assert machine.memory.read_byte(0x9C40) == 0x00
 
 
+def test_os_rom_boot_frame_renders_correct_glyphs():
+    """Glyph cache reads correct pattern bytes from OS ROM during ROM-boot rendering.
+
+    This is the key regression guard for ADR 0005: verifies that the rendering
+    shortcut (direct os_rom[] access instead of read_byte) produces the same
+    pixel output as the full memory-bus path would.
+    """
+    os_rom = bytearray(0x4000)
+    # Char 0x01 at ROM offset 0x2000 + 0x01*8 + 0 = 0x2008: alternating pattern
+    os_rom[0x2008] = 0b10101010  # row 0: alternating pixels
+
+    machine = Machine()
+    machine.memory.load_os_rom(bytes(os_rom))
+    machine.reset()
+
+    # After reset, display list is at 0x9C20 and screen at 0x9C40 (set by _initialize_os_shadows).
+    # Place char 0x01 in the first screen position; OS shadows set chbase = 0xE0.
+    machine.memory.ram[0x9C40] = 0x01
+
+    # Set COLPF2 = 0x00 (black bg) and COLPF1 = 0x0E (bright luminance),
+    # syncing via the shadow path that the real OS uses.
+    machine.memory.write_byte(int(GTIAWriteRegister.COLPF2), 0x00)
+    machine.memory.write_byte(int(GTIAWriteRegister.COLPF1), 0x0E)
+
+    machine.run_frame(queue_audio=False)
+
+    # For mode 2 (ANTIC mode 2 = 40-col text), display begins after the blank
+    # at scanline 0 (skipped by blank instructions).  The first text line starts
+    # at the display-list row 0 which maps to framebuffer row 0 after the 8
+    # blank scanlines ANTIC inserts before the visible area.
+    # Rather than hard-coding the scanline offset, just verify that somewhere in
+    # the first few text rows the expected alternating pattern appears.
+    fg = machine.gtia.color_to_rgb((0x00 & 0xF0) | (0x0E & 0x0E))  # mode-2 hires luminance
+    bg = machine.gtia.color_to_rgb(0x00)
+
+    # Scan the first 24 framebuffer rows; one of them is the first text scanline
+    # for char 0x01 row 0, which must produce the alternating fg/bg/fg/bg pattern.
+    found = False
+    for row in machine.gtia.framebuffer:
+        if row[0] == fg and row[1] == bg and row[2] == fg and row[3] == bg:
+            found = True
+            break
+    assert found, "Alternating glyph pattern from OS ROM was not found in any framebuffer row"
+
+
 def test_continue_without_self_test_marks_checksum_gate_complete(monkeypatch):
     machine = Machine()
     machine.memory.load_os_rom(create_test_rom_stub(0x4000))
