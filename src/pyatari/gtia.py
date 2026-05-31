@@ -65,6 +65,17 @@ _COLOR_TABLE: list[int] = _build_color_table()
 # Bit masks for pixel extraction — plain tuple for pixel cache, numpy for bitmap mode.
 _PIXEL_MASKS: tuple[int, ...] = (0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01)
 _BIT_MASKS_NP = np.array(_PIXEL_MASKS, dtype=np.uint8)
+_CHACTL_REFLECT: int = int(CHACTLBits.REFLECT)
+_CHACTL_INVERSE: int = int(CHACTLBits.INVERSE)
+# Max scanline cache entries before a full clear. 24 text rows × 8 glyph rows = 192
+# unique entries for a typical text screen; 2048 gives ample headroom for multi-page apps.
+_SCANLINE_CACHE_MAX: int = 2048
+# Pre-computed integer keys for the four GTIA colour registers used in text rendering.
+# Used in the scanline cache key to avoid repeated IntEnum → int conversion.
+_REG_COLPF0: int = int(GTIAWriteRegister.COLPF0)
+_REG_COLPF1: int = int(GTIAWriteRegister.COLPF1)
+_REG_COLPF2: int = int(GTIAWriteRegister.COLPF2)
+_REG_COLBK: int = int(GTIAWriteRegister.COLBK)
 
 # Sentinel used to clear player/missile DMA buffers in-place via slice assignment.
 _ZERO_ROW: tuple[int, ...] = (0,) * DISPLAY_WIDTH
@@ -96,6 +107,15 @@ class GTIA:
     # ROM is immutable so entries are never stale; custom RAM charsets bypass
     # the cache and always fall back to read_byte.
     _glyph_cache: dict[tuple[int, int], list[int]] = field(default_factory=dict)
+    # Cross-scanline pixel table: (fg, bg, subpixel_count) → list[256] of pixel lists.
+    # Built once per unique color+mode combination; eliminates per-scanline [None]*256
+    # setup and all per-character cache-miss list comprehensions.
+    _pixel_table: dict[tuple[int, int, int], list[list[int]]] = field(default_factory=dict)
+    # Scanline output cache: maps (fg, bg, subpixel_count, chbase_page, glyph_row,
+    # chactl_inv, chars_bytes) → pre-rendered numpy row (1-D uint32 array of DISPLAY_WIDTH).
+    # Only caches ROM charset scanlines (glyph data is immutable). On cache hit the row
+    # is copied directly into the framebuffer, bypassing the entire inner loop.
+    _scanline_cache: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         for register in GTIAWriteRegister:
@@ -196,78 +216,112 @@ class GTIA:
         cell_width: int,
         vertical_offset: int = 0,
     ) -> None:
-        # Screen data: ANTIC DMA always reads from RAM, bypassing read_byte dispatch.
+        # ── Phase 1: Cheap invariants (no colour lookups, no glyph reads) ────────────
         scr_start = line.screen_address & 0xFFFF
         chars = self.memory.ram[scr_start:scr_start + columns]
+        chactl_inv = antic_chactl & _CHACTL_INVERSE
+        subpixel_count = cell_width // 8
+        chbase_page = (antic_chbase & 0xFF) << 8
 
         glyph_row = (row + vertical_offset) % ANTIC_MODES[line.mode].scanlines_per_row
-        if line.mode in {2, 3}:
-            fg_color = self._hires_luminance_color()
-            bg_color = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLPF2)])
-        else:
-            fg_color = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLPF1)])
-            bg_color = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLBK)])
-        alt_fg = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLPF2)])
-        alt_bg = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLPF0)])
-
-        if antic_chactl & int(CHACTLBits.REFLECT):
+        if antic_chactl & _CHACTL_REFLECT:
             glyph_row = 7 - (glyph_row % 8)
         else:
             glyph_row %= 8
 
-        subpixel_count = cell_width // 8
-        fg = alt_fg if line.mode in {4, 5, 6, 7} else fg_color
-        bg = alt_bg if line.mode in {4, 5, 6, 7} else bg_color
-
-        # Glyph data: ROM charsets are cached across scanlines (immutable).
-        # RAM charsets are re-fetched each call (data may change).
-        chbase_page = (antic_chbase & 0xFF) << 8
+        # ── Phase 2: Glyph pattern bytearray ────────────────────────────────────────
+        # Read actual glyph pattern bytes for each character on this scanline into a
+        # compact bytearray. This serves two purposes:
+        # (a) scanline cache key component — captures exact glyph data, not just char codes,
+        #     so RAM charsets that change between frames are automatically detected;
+        # (b) pixel expansion source on cache miss — no second RAM read needed.
+        # Inverse-character handling is applied here so the resulting bytes uniquely
+        # identify the visual output, making chactl_inv redundant in the cache key.
+        ram = self.memory.ram
         os_rom = self.memory.os_rom
         if os_rom is not None and OS_ROM_START <= chbase_page <= OS_ROM_END - 0x3FF:
-            cache_key = (chbase_page, glyph_row)
-            if cache_key not in self._glyph_cache:
+            glyph_key = (chbase_page, glyph_row)
+            if glyph_key not in self._glyph_cache:
                 base = chbase_page - OS_ROM_START + glyph_row
-                self._glyph_cache[cache_key] = [os_rom[base + c * 8] for c in range(128)]
-            glyph_patterns: list[int] | None = self._glyph_cache[cache_key]
+                self._glyph_cache[glyph_key] = [os_rom[base + c * 8] for c in range(128)]
+            glyph_src: list[int] | None = self._glyph_cache[glyph_key]
         else:
-            glyph_patterns = None
+            glyph_src = None
 
-        # Build the row into a Python list for fast per-pixel cache access, then
-        # commit to the numpy framebuffer in a single slice assignment.
-        # Per-scanline pixel cache: 256-element list indexed by pattern byte.
-        # fg and bg are constant per scanline, so repeated patterns (especially
-        # 0x00 for spaces) reuse one list instead of allocating a new one per column.
-        pixel_cache: list[list[int] | None] = [None] * 256
-        ram = self.memory.ram
+        patterns = bytearray(columns)
+        if glyph_src is not None:
+            for i, c in enumerate(chars):
+                q = glyph_src[c & 0x7F]
+                if c >> 7:
+                    q = 0 if chactl_inv else q ^ 0xFF
+                patterns[i] = q
+        else:
+            for i, c in enumerate(chars):
+                addr = (chbase_page + (c & 0x7F) * 8 + glyph_row) & 0xFFFF
+                q = ram[addr]
+                if c >> 7:
+                    q = 0 if chactl_inv else q ^ 0xFF
+                patterns[i] = q
+
+        # ── Phase 3: Scanline output cache check ────────────────────────────────────
+        # Key: raw colour registers + mode + pattern bytes. Using raw register values
+        # (not colour_to_rgb output) defers the expensive colour computation until after
+        # the cache miss is confirmed, making hits ~2-5 µs instead of ~20 µs.
+        # The pattern bytes already encode glyph_row and chactl_inv, so they need not
+        # appear separately in the key.
+        wr = self.write_registers
+        sc_key = (
+            wr[_REG_COLPF0], wr[_REG_COLPF1], wr[_REG_COLPF2], wr[_REG_COLBK],
+            line.mode, bytes(patterns),
+        )
+        cached_row = self._scanline_cache.get(sc_key)
+        if cached_row is not None:
+            self.framebuffer[row] = cached_row
+            return
+
+        # ── Phase 4: Colour computation (deferred to cache miss only) ───────────────
+        if line.mode in {2, 3}:
+            fg_color = _COLOR_TABLE[(wr[_REG_COLPF2] & 0xF0) | (wr[_REG_COLPF1] & 0x0E)]
+            bg_color = _COLOR_TABLE[wr[_REG_COLPF2] & 0xFF]
+        else:
+            fg_color = _COLOR_TABLE[wr[_REG_COLPF1] & 0xFF]
+            bg_color = _COLOR_TABLE[wr[_REG_COLBK] & 0xFF]
+        if line.mode in {4, 5, 6, 7}:
+            fg = _COLOR_TABLE[wr[_REG_COLPF2] & 0xFF]
+            bg = _COLOR_TABLE[wr[_REG_COLPF0] & 0xFF]
+        else:
+            fg = fg_color
+            bg = bg_color
+
+        # Cross-scanline pixel table: precomputed for all 256 pattern bytes for this
+        # (fg, bg, subpixel_count) combination. Built once and reused across all frames.
+        table_key = (fg, bg, subpixel_count)
+        pixel_table = self._pixel_table.get(table_key)
+        if pixel_table is None:
+            if subpixel_count == 1:
+                pixel_table = [[fg if p & m else bg for m in _PIXEL_MASKS] for p in range(256)]
+            else:
+                pixel_table = [[c for m in _PIXEL_MASKS for c in (fg if p & m else bg,) * 2] for p in range(256)]
+            self._pixel_table[table_key] = pixel_table
+
+        # ── Phase 5: Pixel expansion ─────────────────────────────────────────────────
+        # patterns bytearray already computed in Phase 2 — no second glyph read.
         out_row: list[int] = [bg_color] * DISPLAY_WIDTH
+        col_start = 0
         if subpixel_count == 1:
-            for column, char_code in enumerate(chars):
-                if glyph_patterns is not None:
-                    pattern = glyph_patterns[char_code & 0x7F]
-                else:
-                    pattern = ram[(chbase_page + (char_code & 0x7F) * 8 + glyph_row) & 0xFFFF]
-                if char_code & 0x80:
-                    pattern = 0 if antic_chactl & int(CHACTLBits.INVERSE) else pattern ^ 0xFF
-                pixels = pixel_cache[pattern]
-                if pixels is None:
-                    pixel_cache[pattern] = pixels = [fg if pattern & m else bg for m in _PIXEL_MASKS]
-                out_row[column * 8:column * 8 + 8] = pixels
+            for q in patterns:
+                out_row[col_start:col_start + 8] = pixel_table[q]
+                col_start += 8
         else:
-            for column, char_code in enumerate(chars):
-                if glyph_patterns is not None:
-                    pattern = glyph_patterns[char_code & 0x7F]
-                else:
-                    pattern = ram[(chbase_page + (char_code & 0x7F) * 8 + glyph_row) & 0xFFFF]
-                if char_code & 0x80:
-                    pattern = 0 if antic_chactl & int(CHACTLBits.INVERSE) else pattern ^ 0xFF
-                pixels = pixel_cache[pattern]
-                if pixels is None:
-                    pixel_cache[pattern] = pixels = [c for m in _PIXEL_MASKS for c in (fg if pattern & m else bg,) * 2]
-                out_row[column * 16:column * 16 + 16] = pixels
+            for q in patterns:
+                out_row[col_start:col_start + cell_width] = pixel_table[q]
+                col_start += cell_width
 
-        # Single numpy assignment commits the fully-built row; cheaper than
-        # writing to the numpy array 40 times inside the inner loop.
+        # ── Phase 6: Commit + cache store ───────────────────────────────────────────
         self.framebuffer[row] = out_row
+        if len(self._scanline_cache) >= _SCANLINE_CACHE_MAX:
+            self._scanline_cache.clear()
+        self._scanline_cache[sc_key] = self.framebuffer[row].copy()
 
     def _render_bitmap_mode(self, line: DisplayListLine, *, row: int, vertical_offset: int = 0) -> None:
         mode_info = ANTIC_MODES[line.mode]
