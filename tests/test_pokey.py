@@ -55,6 +55,7 @@ def test_keyboard_code_and_irq_state_changes_on_press_and_release():
 def test_keyboard_scan_must_be_enabled_to_report_keypress():
     pokey = POKEY(memory=MemoryBus())
     pokey.write_register(int(POKEYWriteRegister.IRQEN), int(IRQBits.KEYBOARD))
+    pokey.write_register(int(POKEYWriteRegister.SKCTL), 0)  # explicitly disable keyboard scan
 
     assert pokey.press_key(0x3F) is False
     assert pokey.read_register(int(POKEYReadRegister.KBCODE)) == 0xFF
