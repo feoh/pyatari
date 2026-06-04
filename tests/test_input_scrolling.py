@@ -39,6 +39,17 @@ def test_keyboard_mapping_updates_kbcode():
     assert machine.pokey.kbcode == 0x3F
 
 
+def test_space_as_unicode_char_maps_to_space_keycode():
+    """Frontend sends " " (unicode), not "space" (name) — both must work."""
+    machine = make_machine()
+    machine.memory.write_byte(int(POKEYWriteRegister.IRQEN), int(IRQBits.KEYBOARD))
+
+    machine.press_key(" ")
+
+    assert machine.pokey.kbcode == 0x21
+    assert machine.cpu.irq_pending is True
+
+
 def test_keyboard_press_queues_irq_when_pokey_irq_is_enabled():
     machine = make_machine()
     machine.memory.write_byte(

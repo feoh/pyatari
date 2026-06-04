@@ -74,6 +74,7 @@ KEYCODE_MAP: dict[str, int] = {
     "8": 0x35,
     "9": 0x30,
     "space": 0x21,
+    " ": 0x21,
     "return": 0x0C,
     ";": 0x02,
     "+": 0x06,
