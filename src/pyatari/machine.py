@@ -76,6 +76,8 @@ KEYCODE_MAP: dict[str, int] = {
     "space": 0x21,
     " ": 0x21,
     "return": 0x0C,
+    "backspace": 0x34,
+    "delete": 0x34,
     ";": 0x02,
     "+": 0x06,
     "*": 0x07,
