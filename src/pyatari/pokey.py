@@ -55,7 +55,7 @@ class POKEY:
     audf: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
     audc: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
     audctl: int = 0
-    skctl: int = 0
+    skctl: int = int(SKCTLBits.KEYBOARD_SCAN) | int(SKCTLBits.KEYBOARD_DEBOUNCE)
     serout: int = 0
     serin: int = 0
     irqen: int = 0
@@ -79,7 +79,7 @@ class POKEY:
         self.audf = [0, 0, 0, 0]
         self.audc = [0, 0, 0, 0]
         self.audctl = 0
-        self.skctl = 0
+        self.skctl = int(SKCTLBits.KEYBOARD_SCAN) | int(SKCTLBits.KEYBOARD_DEBOUNCE)
         self.serout = 0
         self.serin = 0
         self.irqen = 0

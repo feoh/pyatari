@@ -38,3 +38,4 @@ record rather than a template exercise.
 - [0006-pm-dirty-flags-fill-row-rom-check-pixel-cache](./0006-pm-dirty-flags-fill-row-rom-check-pixel-cache.md)
 - [0007-cpu-packed-status-byte-dispatch-table-stack-bypass](./0007-cpu-packed-status-byte-dispatch-table-stack-bypass.md)
 - [0008-numpy-framebuffer-memory-handler-list-clock-inline](./0008-numpy-framebuffer-memory-handler-list-clock-inline.md)
+- [0009-text-scanline-cache-and-pixel-table](./0009-text-scanline-cache-and-pixel-table.md)
