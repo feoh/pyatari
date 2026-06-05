@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from math import sqrt
+from typing import Any
 
 import numpy as np
 
@@ -56,7 +57,9 @@ def _build_color_table() -> list[int]:
             result.append((gray << 16) | (gray << 8) | gray)
         else:
             r, g, b = GTIA_HUE_RGB[hue]
-            result.append((int(r * brightness) << 16) | (int(g * brightness) << 8) | int(b * brightness))
+            result.append(
+                (int(r * brightness) << 16) | (int(g * brightness) << 8) | int(b * brightness)
+            )
     return result
 
 
@@ -66,7 +69,6 @@ _COLOR_TABLE: list[int] = _build_color_table()
 _PIXEL_MASKS: tuple[int, ...] = (0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01)
 _BIT_MASKS_NP = np.array(_PIXEL_MASKS, dtype=np.uint8)
 _CHACTL_REFLECT: int = int(CHACTLBits.REFLECT)
-_CHACTL_INVERSE: int = int(CHACTLBits.INVERSE)
 # Max scanline cache entries before a full clear. 24 text rows × 8 glyph rows = 192
 # unique entries for a typical text screen; 2048 gives ample headroom for multi-page apps.
 _SCANLINE_CACHE_MAX: int = 2048
@@ -115,13 +117,13 @@ class GTIA:
     # chactl_inv, chars_bytes) → pre-rendered numpy row (1-D uint32 array of DISPLAY_WIDTH).
     # Only caches ROM charset scanlines (glyph data is immutable). On cache hit the row
     # is copied directly into the framebuffer, bypassing the entire inner loop.
-    _scanline_cache: dict = field(default_factory=dict)
+    _scanline_cache: dict[tuple[int, int, int, int, int, bytes], Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        for register in GTIAWriteRegister:
-            self.write_registers[int(register)] = 0
-        for register in GTIAReadRegister:
-            self.read_registers[int(register)] = 0
+        for write_register in GTIAWriteRegister:
+            self.write_registers[int(write_register)] = 0
+        for read_register in GTIAReadRegister:
+            self.read_registers[int(read_register)] = 0
         self._reset_input_registers()
 
     def install(self) -> None:
@@ -198,7 +200,9 @@ class GTIA:
                 vertical_offset=self._vertical_scroll_offset(line, antic_vscrol),
             )
         else:
-            self._render_bitmap_mode(line, row=row, vertical_offset=self._vertical_scroll_offset(line, antic_vscrol))
+            self._render_bitmap_mode(
+                line, row=row, vertical_offset=self._vertical_scroll_offset(line, antic_vscrol)
+            )
 
         if line.hscroll:
             self._apply_horizontal_scroll(row, self._horizontal_scroll_offset(line, antic_hscrol))
@@ -217,13 +221,17 @@ class GTIA:
         vertical_offset: int = 0,
     ) -> None:
         # ── Phase 1: Cheap invariants (no colour lookups, no glyph reads) ────────────
-        scr_start = line.screen_address & 0xFFFF
-        chars = self.memory.ram[scr_start:scr_start + columns]
-        chactl_inv = antic_chactl & _CHACTL_INVERSE
+        mode = line.mode
+        screen_address = line.screen_address
+        if mode is None or screen_address is None:
+            self._fill_row(row, self.write_registers[int(GTIAWriteRegister.COLBK)])
+            return
+        scr_start = screen_address & 0xFFFF
+        chars = self.memory.ram[scr_start : scr_start + columns]
         subpixel_count = cell_width // 8
         chbase_page = (antic_chbase & 0xFF) << 8
 
-        glyph_row = (row + vertical_offset) % ANTIC_MODES[line.mode].scanlines_per_row
+        glyph_row = (row + vertical_offset) % ANTIC_MODES[mode].scanlines_per_row
         if antic_chactl & _CHACTL_REFLECT:
             glyph_row = 7 - (glyph_row % 8)
         else:
@@ -253,14 +261,14 @@ class GTIA:
             for i, c in enumerate(chars):
                 q = glyph_src[c & 0x7F]
                 if c >> 7:
-                    q = 0 if chactl_inv else q ^ 0xFF
+                    q ^= 0xFF
                 patterns[i] = q
         else:
             for i, c in enumerate(chars):
                 addr = (chbase_page + (c & 0x7F) * 8 + glyph_row) & 0xFFFF
                 q = ram[addr]
                 if c >> 7:
-                    q = 0 if chactl_inv else q ^ 0xFF
+                    q ^= 0xFF
                 patterns[i] = q
 
         # ── Phase 3: Scanline output cache check ────────────────────────────────────
@@ -271,8 +279,12 @@ class GTIA:
         # appear separately in the key.
         wr = self.write_registers
         sc_key = (
-            wr[_REG_COLPF0], wr[_REG_COLPF1], wr[_REG_COLPF2], wr[_REG_COLBK],
-            line.mode, bytes(patterns),
+            wr[_REG_COLPF0],
+            wr[_REG_COLPF1],
+            wr[_REG_COLPF2],
+            wr[_REG_COLBK],
+            mode,
+            bytes(patterns),
         )
         cached_row = self._scanline_cache.get(sc_key)
         if cached_row is not None:
@@ -280,13 +292,13 @@ class GTIA:
             return
 
         # ── Phase 4: Colour computation (deferred to cache miss only) ───────────────
-        if line.mode in {2, 3}:
+        if mode in {2, 3}:
             fg_color = _COLOR_TABLE[(wr[_REG_COLPF2] & 0xF0) | (wr[_REG_COLPF1] & 0x0E)]
             bg_color = _COLOR_TABLE[wr[_REG_COLPF2] & 0xFF]
         else:
             fg_color = _COLOR_TABLE[wr[_REG_COLPF1] & 0xFF]
             bg_color = _COLOR_TABLE[wr[_REG_COLBK] & 0xFF]
-        if line.mode in {4, 5, 6, 7}:
+        if mode in {4, 5, 6, 7}:
             fg = _COLOR_TABLE[wr[_REG_COLPF2] & 0xFF]
             bg = _COLOR_TABLE[wr[_REG_COLPF0] & 0xFF]
         else:
@@ -301,7 +313,10 @@ class GTIA:
             if subpixel_count == 1:
                 pixel_table = [[fg if p & m else bg for m in _PIXEL_MASKS] for p in range(256)]
             else:
-                pixel_table = [[c for m in _PIXEL_MASKS for c in (fg if p & m else bg,) * 2] for p in range(256)]
+                pixel_table = [
+                    [c for m in _PIXEL_MASKS for c in (fg if p & m else bg,) * 2]
+                    for p in range(256)
+                ]
             self._pixel_table[table_key] = pixel_table
 
         # ── Phase 5: Pixel expansion ─────────────────────────────────────────────────
@@ -310,11 +325,11 @@ class GTIA:
         col_start = 0
         if subpixel_count == 1:
             for q in patterns:
-                out_row[col_start:col_start + 8] = pixel_table[q]
+                out_row[col_start : col_start + 8] = pixel_table[q]
                 col_start += 8
         else:
             for q in patterns:
-                out_row[col_start:col_start + cell_width] = pixel_table[q]
+                out_row[col_start : col_start + cell_width] = pixel_table[q]
                 col_start += cell_width
 
         # ── Phase 6: Commit + cache store ───────────────────────────────────────────
@@ -323,11 +338,20 @@ class GTIA:
             self._scanline_cache.clear()
         self._scanline_cache[sc_key] = self.framebuffer[row].copy()
 
-    def _render_bitmap_mode(self, line: DisplayListLine, *, row: int, vertical_offset: int = 0) -> None:
-        mode_info = ANTIC_MODES[line.mode]
+    def _render_bitmap_mode(
+        self, line: DisplayListLine, *, row: int, vertical_offset: int = 0
+    ) -> None:
+        mode = line.mode
+        screen_address = line.screen_address
+        if mode is None or screen_address is None:
+            self._fill_row(row, self.write_registers[int(GTIAWriteRegister.COLBK)])
+            return
+        mode_info = ANTIC_MODES[mode]
         row_block = vertical_offset // max(1, mode_info.scanlines_per_row)
-        base_address = (line.screen_address + (row_block * mode_info.bytes_per_line)) & 0xFFFF
-        data = [self.memory.read_byte(base_address + index) for index in range(mode_info.bytes_per_line)]
+        base_address = (screen_address + (row_block * mode_info.bytes_per_line)) & 0xFFFF
+        data = [
+            self.memory.read_byte(base_address + index) for index in range(mode_info.bytes_per_line)
+        ]
         colors = [
             self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLBK)]),
             self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLPF0)]),
@@ -336,12 +360,12 @@ class GTIA:
         ]
 
         pixels: list[int] = []
-        if line.mode in {8, 10, 13, 14}:
+        if mode in {8, 10, 13, 14}:
             for byte in data:
                 for shift in (6, 4, 2, 0):
                     pixels.append(colors[(byte >> shift) & 0x03])
-        elif line.mode in {9, 11, 12, 15}:
-            if line.mode == 15:
+        elif mode in {9, 11, 12, 15}:
+            if mode == 15:
                 fg = self._hires_luminance_color()
                 bg = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLPF2)])
             else:
@@ -362,7 +386,9 @@ class GTIA:
             if n < DISPLAY_WIDTH:
                 self.framebuffer[row, n:] = colors[0]
 
-    def render_player(self, player: int, *, xpos: int, graphics: int, size: int, color: int) -> None:
+    def render_player(
+        self, player: int, *, xpos: int, graphics: int, size: int, color: int
+    ) -> None:
         player_row = self.player_dma[player]
         if self._player_dirty[player]:
             player_row[:] = _ZERO_ROW
@@ -382,7 +408,9 @@ class GTIA:
                 if 0 <= x < DISPLAY_WIDTH:
                     player_row[x] = color_rgb
 
-    def render_missiles(self, *, xpos: list[int], graphics: int, size_mask: int, color: int) -> None:
+    def render_missiles(
+        self, *, xpos: list[int], graphics: int, size_mask: int, color: int
+    ) -> None:
         if self._missiles_dirty:
             for missile in range(4):
                 self.missile_dma[missile][:] = _ZERO_ROW
@@ -429,7 +457,9 @@ class GTIA:
         register = int(GTIAReadRegister.TRIG0) + trigger
         self.read_registers[register] = 0x00 if pressed else 0x01
 
-    def set_console_switch(self, *, start: bool | None = None, select: bool | None = None, option: bool | None = None) -> None:
+    def set_console_switch(
+        self, *, start: bool | None = None, select: bool | None = None, option: bool | None = None
+    ) -> None:
         consol = self.read_registers[int(GTIAReadRegister.CONSOL)] & 0x07
         if start is not None:
             consol = (consol & ~0x01) | (0x00 if start else 0x01)
@@ -466,7 +496,7 @@ class GTIA:
         bg = self.color_to_rgb(self.write_registers[int(GTIAWriteRegister.COLBK)])
         src = self.framebuffer[row].copy()  # copy before in-place modification
         self.framebuffer[row, :offset] = bg
-        self.framebuffer[row, offset:] = src[:DISPLAY_WIDTH - offset]
+        self.framebuffer[row, offset:] = src[: DISPLAY_WIDTH - offset]
 
     def _reset_input_registers(self) -> None:
         self._clear_collision_registers()

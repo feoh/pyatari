@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 from pyatari.antic import DisplayListLine
-from pyatari.constants import CHACTLBits, GTIAReadRegister, GTIAWriteRegister, PORTBBits, RESET_VECTOR
+from pyatari.constants import (
+    CHACTLBits,
+    GTIAReadRegister,
+    GTIAWriteRegister,
+    PORTBBits,
+    RESET_VECTOR,
+)
 from pyatari.display import DisplaySurface
 from pyatari.gtia import DISPLAY_WIDTH, GTIA
 from pyatari.machine import Machine
 from pyatari.memory import MemoryBus
 
 
-def test_gtia_write_and_read_registers_round_trip():
+def test_gtia_write_and_read_registers_round_trip() -> None:
     gtia = GTIA(memory=MemoryBus())
 
     gtia.write_register(int(GTIAWriteRegister.COLPF1), 0x3A)
@@ -18,7 +24,7 @@ def test_gtia_write_and_read_registers_round_trip():
     assert gtia.read_register(int(GTIAWriteRegister.COLPF1)) == 0x3A
 
 
-def test_hitclr_clears_collision_registers():
+def test_hitclr_clears_collision_registers() -> None:
     gtia = GTIA(memory=MemoryBus())
     gtia.read_registers[int(GTIAReadRegister.P0PF)] = 0xFF
 
@@ -27,7 +33,7 @@ def test_hitclr_clears_collision_registers():
     assert gtia.read_register(int(GTIAReadRegister.P0PF)) == 0
 
 
-def test_hitclr_preserves_input_registers():
+def test_hitclr_preserves_input_registers() -> None:
     gtia = GTIA(memory=MemoryBus())
     gtia.set_console_switch(start=True)
 
@@ -37,7 +43,7 @@ def test_hitclr_preserves_input_registers():
     assert gtia.read_register(int(GTIAReadRegister.PAL)) == 0x01
 
 
-def test_trig3_reflects_basic_rom_enable_flag():
+def test_trig3_reflects_basic_rom_enable_flag() -> None:
     memory = MemoryBus()
     gtia = GTIA(memory=memory)
 
@@ -48,7 +54,7 @@ def test_trig3_reflects_basic_rom_enable_flag():
     assert gtia.read_register(int(GTIAReadRegister.TRIG3)) == 0x00
 
 
-def test_color_to_rgb_changes_with_input():
+def test_color_to_rgb_changes_with_input() -> None:
     gtia = GTIA(memory=MemoryBus())
 
     dark = gtia.color_to_rgb(0x00)
@@ -60,7 +66,7 @@ def test_color_to_rgb_changes_with_input():
     assert gtia.color_to_rgb(0x94) == gtia.color_to_rgb(0x95)
 
 
-def test_color_to_rgb_maps_basic_blue_distinctly_from_black():
+def test_color_to_rgb_maps_basic_blue_distinctly_from_black() -> None:
     gtia = GTIA(memory=MemoryBus())
 
     assert gtia.color_to_rgb(0x00) == 0x000000
@@ -68,7 +74,7 @@ def test_color_to_rgb_maps_basic_blue_distinctly_from_black():
     assert gtia.color_to_rgb(0x9A) == 0x007ED7
 
 
-def test_render_scanline_mode_2_text_uses_hires_playfield_colors():
+def test_render_scanline_mode_2_text_uses_hires_playfield_colors() -> None:
     memory = MemoryBus()
     gtia = GTIA(memory=memory)
     gtia.write_register(int(GTIAWriteRegister.COLPF1), 0xCA)
@@ -76,7 +82,9 @@ def test_render_scanline_mode_2_text_uses_hires_playfield_colors():
     memory.write_byte(0x3000, 0x41)
     memory.write_byte(0x1608, 0b10000000)  # simplified glyph row for char $41
 
-    line = DisplayListLine(instruction_address=0x2000, instruction=0x42, mode=2, scanlines=8, screen_address=0x3000)
+    line = DisplayListLine(
+        instruction_address=0x2000, instruction=0x42, mode=2, scanlines=8, screen_address=0x3000
+    )
     gtia.render_scanline(line, row=0, antic_chbase=0x14)
 
     assert gtia.framebuffer[0][0] == gtia.color_to_rgb(0x9A)
@@ -84,7 +92,7 @@ def test_render_scanline_mode_2_text_uses_hires_playfield_colors():
     assert gtia.framebuffer[0][DISPLAY_WIDTH - 1] == gtia.color_to_rgb(0x94)
 
 
-def test_display_surface_copies_gtia_framebuffer():
+def test_display_surface_copies_gtia_framebuffer() -> None:
     gtia = GTIA(memory=MemoryBus())
     gtia.framebuffer[0][0] = 0x123456
 
@@ -95,7 +103,7 @@ def test_display_surface_copies_gtia_framebuffer():
     assert gtia.framebuffer[0][0] == 0x123456
 
 
-def test_render_scanline_inverse_text_uses_chactl():
+def test_render_scanline_inverse_text_uses_chactl() -> None:
     memory = MemoryBus()
     gtia = GTIA(memory=memory)
     gtia.write_register(int(GTIAWriteRegister.COLPF1), 0xCA)
@@ -103,18 +111,40 @@ def test_render_scanline_inverse_text_uses_chactl():
     memory.write_byte(0x3000, 0xC1)
     memory.write_byte(0x1608, 0b10000000)
 
-    line = DisplayListLine(instruction_address=0x2000, instruction=0x42, mode=2, scanlines=8, screen_address=0x3000)
+    line = DisplayListLine(
+        instruction_address=0x2000, instruction=0x42, mode=2, scanlines=8, screen_address=0x3000
+    )
     gtia.render_scanline(line, row=0, antic_chbase=0x14, antic_chactl=0)
     assert gtia.framebuffer[0][0] == gtia.color_to_rgb(0x94)
     assert gtia.framebuffer[0][1] == gtia.color_to_rgb(0x9A)
 
-    gtia.render_scanline(line, row=1, antic_chbase=0x14, antic_chactl=int(CHACTLBits.INVERSE))
-    assert gtia.framebuffer[1][0] == gtia.color_to_rgb(0x94)
-    assert gtia.framebuffer[1][1] == gtia.color_to_rgb(0x94)
+    gtia.render_scanline(line, row=0, antic_chbase=0x14, antic_chactl=int(CHACTLBits.INVERSE))
+    assert gtia.framebuffer[0][0] == gtia.color_to_rgb(0x94)
+    assert gtia.framebuffer[0][1] == gtia.color_to_rgb(0x9A)
 
 
+def test_render_scanline_inverse_space_cursor_is_solid_when_chactl_inverse_enabled() -> None:
+    memory = MemoryBus()
+    gtia = GTIA(memory=memory)
+    gtia.write_register(int(GTIAWriteRegister.COLPF1), 0xCA)
+    gtia.write_register(int(GTIAWriteRegister.COLPF2), 0x94)
+    memory.write_byte(0x3000, 0x80)
+    memory.write_byte(0x1000, 0x00)
 
-def test_render_scanline_mode_6_double_width_and_chbase_switching():
+    line = DisplayListLine(
+        instruction_address=0x2000,
+        instruction=0x42,
+        mode=2,
+        scanlines=8,
+        screen_address=0x3000,
+    )
+
+    gtia.render_scanline(line, row=0, antic_chbase=0x10, antic_chactl=int(CHACTLBits.INVERSE))
+
+    assert all(gtia.framebuffer[0][x] == gtia.color_to_rgb(0x9A) for x in range(8))
+
+
+def test_render_scanline_mode_6_double_width_and_chbase_switching() -> None:
     memory = MemoryBus()
     gtia = GTIA(memory=memory)
     gtia.write_register(int(GTIAWriteRegister.COLPF2), 0x2E)
@@ -123,7 +153,9 @@ def test_render_scanline_mode_6_double_width_and_chbase_switching():
     memory.write_byte(0x1608, 0b10000000)
     memory.write_byte(0x2609, 0b01000000)
 
-    line = DisplayListLine(instruction_address=0x2000, instruction=0x46, mode=6, scanlines=8, screen_address=0x3100)
+    line = DisplayListLine(
+        instruction_address=0x2000, instruction=0x46, mode=6, scanlines=8, screen_address=0x3100
+    )
     gtia.render_scanline(line, row=0, antic_chbase=0x14)
     first_base = gtia.framebuffer[0][0]
     second_base = gtia.framebuffer[0][2]
@@ -136,8 +168,7 @@ def test_render_scanline_mode_6_double_width_and_chbase_switching():
     assert gtia.framebuffer[1][2] == gtia.color_to_rgb(0x2E)
 
 
-
-def test_render_scanline_bitmap_mode_8_uses_playfield_colors():
+def test_render_scanline_bitmap_mode_8_uses_playfield_colors() -> None:
     memory = MemoryBus()
     gtia = GTIA(memory=memory)
     gtia.write_register(int(GTIAWriteRegister.COLBK), 0x00)
@@ -146,7 +177,9 @@ def test_render_scanline_bitmap_mode_8_uses_playfield_colors():
     gtia.write_register(int(GTIAWriteRegister.COLPF2), 0x36)
     memory.write_byte(0x3200, 0b00011011)
 
-    line = DisplayListLine(instruction_address=0x2000, instruction=0x48, mode=8, scanlines=8, screen_address=0x3200)
+    line = DisplayListLine(
+        instruction_address=0x2000, instruction=0x48, mode=8, scanlines=8, screen_address=0x3200
+    )
     gtia.render_scanline(line, row=0)
 
     assert gtia.framebuffer[0][0] == gtia.color_to_rgb(0x00)
@@ -155,22 +188,23 @@ def test_render_scanline_bitmap_mode_8_uses_playfield_colors():
     assert gtia.framebuffer[0][27] == gtia.color_to_rgb(0x36)
 
 
-def test_render_scanline_bitmap_mode_15_uses_hires_playfield_colors():
+def test_render_scanline_bitmap_mode_15_uses_hires_playfield_colors() -> None:
     memory = MemoryBus()
     gtia = GTIA(memory=memory)
     gtia.write_register(int(GTIAWriteRegister.COLPF1), 0xCA)
     gtia.write_register(int(GTIAWriteRegister.COLPF2), 0x94)
     memory.write_byte(0x3200, 0b10000000)
 
-    line = DisplayListLine(instruction_address=0x2000, instruction=0x4F, mode=15, scanlines=1, screen_address=0x3200)
+    line = DisplayListLine(
+        instruction_address=0x2000, instruction=0x4F, mode=15, scanlines=1, screen_address=0x3200
+    )
     gtia.render_scanline(line, row=0)
 
     assert gtia.framebuffer[0][0] == gtia.color_to_rgb(0x9A)
     assert gtia.framebuffer[0][1] == gtia.color_to_rgb(0x94)
 
 
-
-def test_player_rendering_respects_position_and_size():
+def test_player_rendering_respects_position_and_size() -> None:
     gtia = GTIA(memory=MemoryBus())
     gtia.render_player(0, xpos=10, graphics=0b10000000, size=1, color=0x2E)
 
@@ -179,8 +213,7 @@ def test_player_rendering_respects_position_and_size():
     assert gtia.player_dma[0][12] == 0
 
 
-
-def test_missile_rendering_and_collision_registers():
+def test_missile_rendering_and_collision_registers() -> None:
     gtia = GTIA(memory=MemoryBus())
     gtia.write_register(int(GTIAWriteRegister.COLBK), 0x00)
     gtia._fill_row(0, 0x12)
@@ -191,8 +224,7 @@ def test_missile_rendering_and_collision_registers():
     assert gtia.read_register(int(GTIAReadRegister.M0PF)) == 0x0F
 
 
-
-def test_machine_installs_gtia_handlers_and_renders_visible_line():
+def test_machine_installs_gtia_handlers_and_renders_visible_line() -> None:
     machine = Machine()
     machine.memory.write_word(RESET_VECTOR, 0x2000)
     machine.memory.load_ram(0x2000, bytes([0xEA] * 57))
@@ -220,7 +252,7 @@ def test_machine_installs_gtia_handlers_and_renders_visible_line():
     assert machine.gtia.framebuffer[0][8] == machine.gtia.color_to_rgb(0x3A)
 
 
-def test_render_scanline_with_os_rom_charset_uses_glyph_cache():
+def test_render_scanline_with_os_rom_charset_uses_glyph_cache() -> None:
     """Glyph cache for OS ROM charset produces correct pixels from ROM data."""
     os_rom = bytearray(0x4000)
     # Char 0x41 at ROM offset 0x2000 + 0x41*8 = 0x2208 (CPU address 0xE208)
@@ -240,22 +272,25 @@ def test_render_scanline_with_os_rom_charset_uses_glyph_cache():
     gtia.write_register(int(GTIAWriteRegister.COLPF2), 0x00)
 
     line = DisplayListLine(
-        instruction_address=0x9C20, instruction=0x42, mode=2,
-        scanlines=8, screen_address=0x9C40,
+        instruction_address=0x9C20,
+        instruction=0x42,
+        mode=2,
+        scanlines=8,
+        screen_address=0x9C40,
     )
 
     # Row 0: pattern 0xAA = 10101010
     gtia.render_scanline(line, row=0, antic_chbase=0xE0)
     fg = gtia.color_to_rgb((0x00 & 0xF0) | (0x0E & 0x0E))  # hires luminance for mode 2
     bg = gtia.color_to_rgb(0x00)
-    assert gtia.framebuffer[0][0] == fg   # bit 7 set
-    assert gtia.framebuffer[0][1] == bg   # bit 6 clear
-    assert gtia.framebuffer[0][2] == fg   # bit 5 set
-    assert gtia.framebuffer[0][3] == bg   # bit 4 clear
-    assert gtia.framebuffer[0][4] == fg   # bit 3 set
-    assert gtia.framebuffer[0][5] == bg   # bit 2 clear
-    assert gtia.framebuffer[0][6] == fg   # bit 1 set
-    assert gtia.framebuffer[0][7] == bg   # bit 0 clear
+    assert gtia.framebuffer[0][0] == fg  # bit 7 set
+    assert gtia.framebuffer[0][1] == bg  # bit 6 clear
+    assert gtia.framebuffer[0][2] == fg  # bit 5 set
+    assert gtia.framebuffer[0][3] == bg  # bit 4 clear
+    assert gtia.framebuffer[0][4] == fg  # bit 3 set
+    assert gtia.framebuffer[0][5] == bg  # bit 2 clear
+    assert gtia.framebuffer[0][6] == fg  # bit 1 set
+    assert gtia.framebuffer[0][7] == bg  # bit 0 clear
     # space char → all bg
     for x in range(8, 16):
         assert gtia.framebuffer[0][x] == bg

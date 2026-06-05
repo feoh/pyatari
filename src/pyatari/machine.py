@@ -25,11 +25,11 @@ from pyatari.constants import (
 from pyatari.antic import ANTIC
 from pyatari.audio import AudioOutput
 from pyatari.clock import MasterClock
-from pyatari.cpu import CPU, Opcode
+from pyatari.cpu import CPU
 from pyatari.display import DisplaySurface
 from pyatari.gtia import GTIA
 from pyatari.memory import MemoryBus
-from pyatari.opcodes import OPCODES
+from pyatari.opcodes import OPCODES, Opcode
 from pyatari.peripherals import CassetteDeck, PrinterDevice
 from pyatari.pia import PIA
 from pyatari.pokey import DEFAULT_AUDIO_SAMPLE_RATE, POKEY
@@ -242,6 +242,8 @@ class Machine:
                 events = self.antic.tick(remaining)
                 if self.pokey.tick(remaining):
                     self.cpu.irq()
+                if "scanline" in events:
+                    self._render_visible_scanlines()
                 if self.antic.consume_nmi() or "dli" in events or "vbi" in events:
                     self.cpu.nmi()
 
@@ -257,7 +259,8 @@ class Machine:
             self._sync_os_shadows_to_hardware()
         if self.antic.consume_nmi() or "dli" in events or "vbi" in events:
             self.cpu.nmi()
-        self._render_visible_scanlines()
+        if "scanline" in events:
+            self._render_visible_scanlines()
         return opcode
 
     def run_steps(self, steps: int) -> list[Opcode]:
@@ -360,14 +363,8 @@ class Machine:
 
     def has_visible_output(self) -> bool:
         """Return True when the current framebuffer contains any non-background pixels."""
-        background = self.gtia.color_to_rgb(
-            self.gtia.write_registers[int(GTIAWriteRegister.COLBK)]
-        )
-        return any(
-            pixel != background
-            for row in self.gtia.framebuffer
-            for pixel in row
-        )
+        background = self.gtia.color_to_rgb(self.gtia.write_registers[int(GTIAWriteRegister.COLBK)])
+        return any(pixel != background for row in self.gtia.framebuffer for pixel in row)
 
     def press_key(self, key: str) -> None:
         normalized = key.lower()
@@ -500,7 +497,9 @@ class Machine:
         self.memory.write_word(int(ShadowRegister.SAVMSC), OS_DEFAULT_SCREEN_ADDRESS)
         self.memory.write_word(int(ShadowRegister.DLPTR), OS_DEFAULT_DISPLAY_LIST_ADDRESS)
         self.memory.write_byte(int(ShadowRegister.RAMTOP), OS_DEFAULT_RAMTOP_PAGE)
-        self.memory.write_byte(int(ShadowRegister.SDMCTL), int(DMACTLBits.DL_DMA | DMACTLBits.NORMAL_PLAYFIELD))
+        self.memory.write_byte(
+            int(ShadowRegister.SDMCTL), int(DMACTLBits.DL_DMA | DMACTLBits.NORMAL_PLAYFIELD)
+        )
         self.memory.write_word(int(ShadowRegister.SDLSTL), OS_DEFAULT_DISPLAY_LIST_ADDRESS)
         self.memory.write_byte(int(ShadowRegister.CHART), 0x02)
         self.memory.write_byte(int(ShadowRegister.CHBAS), 0xE0)
@@ -535,21 +534,51 @@ class Machine:
         """Apply OS-maintained display shadows to the live ANTIC/GTIA state."""
         if self.memory.os_rom is None:
             return
-        self.memory.write_byte(int(ANTICRegister.DMACTL), self.memory.read_byte(int(ShadowRegister.SDMCTL)))
-        self.memory.write_byte(int(ANTICRegister.DLISTL), self.memory.read_byte(int(ShadowRegister.SDLSTL)))
-        self.memory.write_byte(int(ANTICRegister.DLISTH), self.memory.read_byte(int(ShadowRegister.SDLSTH)))
-        self.memory.write_byte(int(ANTICRegister.CHACTL), self.memory.read_byte(int(ShadowRegister.CHART)))
-        self.memory.write_byte(int(ANTICRegister.CHBASE), self.memory.read_byte(int(ShadowRegister.CHBAS)))
-        self.memory.write_byte(int(GTIAWriteRegister.PRIOR), self.memory.read_byte(int(ShadowRegister.GPRIOR)))
-        self.memory.write_byte(int(GTIAWriteRegister.COLPM0), self.memory.read_byte(int(ShadowRegister.PCOLR0)))
-        self.memory.write_byte(int(GTIAWriteRegister.COLPM1), self.memory.read_byte(int(ShadowRegister.PCOLR1)))
-        self.memory.write_byte(int(GTIAWriteRegister.COLPM2), self.memory.read_byte(int(ShadowRegister.PCOLR2)))
-        self.memory.write_byte(int(GTIAWriteRegister.COLPM3), self.memory.read_byte(int(ShadowRegister.PCOLR3)))
-        self.memory.write_byte(int(GTIAWriteRegister.COLPF0), self.memory.read_byte(int(ShadowRegister.COLOR0)))
-        self.memory.write_byte(int(GTIAWriteRegister.COLPF1), self.memory.read_byte(int(ShadowRegister.COLOR1)))
-        self.memory.write_byte(int(GTIAWriteRegister.COLPF2), self.memory.read_byte(int(ShadowRegister.COLOR2)))
-        self.memory.write_byte(int(GTIAWriteRegister.COLPF3), self.memory.read_byte(int(ShadowRegister.COLOR3)))
-        self.memory.write_byte(int(GTIAWriteRegister.COLBK), self.memory.read_byte(int(ShadowRegister.COLOR4)))
+        self.memory.write_byte(
+            int(ANTICRegister.DMACTL), self.memory.read_byte(int(ShadowRegister.SDMCTL))
+        )
+        self.memory.write_byte(
+            int(ANTICRegister.DLISTL), self.memory.read_byte(int(ShadowRegister.SDLSTL))
+        )
+        self.memory.write_byte(
+            int(ANTICRegister.DLISTH), self.memory.read_byte(int(ShadowRegister.SDLSTH))
+        )
+        self.memory.write_byte(
+            int(ANTICRegister.CHACTL), self.memory.read_byte(int(ShadowRegister.CHART))
+        )
+        self.memory.write_byte(
+            int(ANTICRegister.CHBASE), self.memory.read_byte(int(ShadowRegister.CHBAS))
+        )
+        self.memory.write_byte(
+            int(GTIAWriteRegister.PRIOR), self.memory.read_byte(int(ShadowRegister.GPRIOR))
+        )
+        self.memory.write_byte(
+            int(GTIAWriteRegister.COLPM0), self.memory.read_byte(int(ShadowRegister.PCOLR0))
+        )
+        self.memory.write_byte(
+            int(GTIAWriteRegister.COLPM1), self.memory.read_byte(int(ShadowRegister.PCOLR1))
+        )
+        self.memory.write_byte(
+            int(GTIAWriteRegister.COLPM2), self.memory.read_byte(int(ShadowRegister.PCOLR2))
+        )
+        self.memory.write_byte(
+            int(GTIAWriteRegister.COLPM3), self.memory.read_byte(int(ShadowRegister.PCOLR3))
+        )
+        self.memory.write_byte(
+            int(GTIAWriteRegister.COLPF0), self.memory.read_byte(int(ShadowRegister.COLOR0))
+        )
+        self.memory.write_byte(
+            int(GTIAWriteRegister.COLPF1), self.memory.read_byte(int(ShadowRegister.COLOR1))
+        )
+        self.memory.write_byte(
+            int(GTIAWriteRegister.COLPF2), self.memory.read_byte(int(ShadowRegister.COLOR2))
+        )
+        self.memory.write_byte(
+            int(GTIAWriteRegister.COLPF3), self.memory.read_byte(int(ShadowRegister.COLOR3))
+        )
+        self.memory.write_byte(
+            int(GTIAWriteRegister.COLBK), self.memory.read_byte(int(ShadowRegister.COLOR4))
+        )
 
     def _service_serial_bus(self) -> None:
         while self.sio_output_index < len(self.pokey.serial_output_bytes):
@@ -620,9 +649,12 @@ class Machine:
         self.memory.write_byte(int(SIOWorkspace.STATUS), status)
         self.cpu.a = status
         self.cpu.y = status
-        self.cpu.status.carry = status != 0x01
-        self.cpu.status.zero = status == 0
-        self.cpu.status.negative = bool(status & 0x80)
+        self.cpu.p = (
+            (self.cpu.p & 0x7C)
+            | (0x01 if status != 0x01 else 0x00)
+            | (0x02 if status == 0 else 0x00)
+            | (status & 0x80)
+        )
         self.cpu.pc = (self.cpu._pop_word() + 1) & 0xFFFF
 
         intercepted_opcode = OPCODES[0x60]
@@ -636,7 +668,8 @@ class Machine:
             self._sync_os_shadows_to_hardware()
         if self.antic.consume_nmi() or "dli" in events or "vbi" in events:
             self.cpu.nmi()
-        self._render_visible_scanlines()
+        if "scanline" in events:
+            self._render_visible_scanlines()
         return intercepted_opcode
 
     def _install_text_display(self, *, chbase_high: int) -> None:
@@ -675,7 +708,7 @@ class Machine:
     def _write_demo_text(self, screen: bytearray, *, row: int, text: str) -> None:
         text = text[:DEMO_COLUMNS]
         start = row * DEMO_COLUMNS + max(0, (DEMO_COLUMNS - len(text)) // 2)
-        screen[start:start + len(text)] = bytes(self._screen_code_for_char(char) for char in text)
+        screen[start : start + len(text)] = bytes(self._screen_code_for_char(char) for char in text)
 
     def _screen_code_for_char(self, char: str) -> int:
         if len(char) != 1:
@@ -691,20 +724,31 @@ def main() -> None:
     import argparse
     from pathlib import Path
 
-    from pyatari.rom_loader import find_self_test_rom, load_basic_rom, load_self_test_rom, load_xl_rom_bundle
+    from pyatari.rom_loader import (
+        find_self_test_rom,
+        load_basic_rom,
+        load_self_test_rom,
+        load_xl_rom_bundle,
+    )
 
     parser = argparse.ArgumentParser(description="PyAtari — Atari 800 emulator")
     parser.add_argument("xex", nargs="?", help="XEX executable to load")
     parser.add_argument(
-        "--frames", type=int, default=None,
+        "--frames",
+        type=int,
+        default=None,
         help="run N frames headless (omit for interactive pygame window)",
     )
     parser.add_argument(
-        "--scale", type=int, default=2,
+        "--scale",
+        type=int,
+        default=2,
         help="integer display scale factor (default: 2)",
     )
     parser.add_argument(
-        "--rom-dir", type=Path, default=None,
+        "--rom-dir",
+        type=Path,
+        default=None,
         help="directory containing ROM files (default: roms/ next to package)",
     )
     parser.add_argument(
@@ -773,13 +817,8 @@ def main() -> None:
         xex_path = Path(args.xex)
         xex_data = xex_path.read_bytes()
         image = machine.load_xex(xex_data)
-        run_addr = (
-            f"${image.run_address:04X}" if image.run_address is not None else "none"
-        )
-        print(
-            f"Loaded {xex_path.name}: "
-            f"{len(image.segments)} segment(s), run address {run_addr}"
-        )
+        run_addr = f"${image.run_address:04X}" if image.run_address is not None else "none"
+        print(f"Loaded {xex_path.name}: {len(image.segments)} segment(s), run address {run_addr}")
 
     if args.xex is None and not boot_real_rom:
         machine.load_demo_screen()
@@ -795,10 +834,7 @@ def main() -> None:
             machine.run_frame(queue_audio=False)
 
         st = machine.status()
-        print(
-            f"PyAtari: {st.frame} frame(s) executed, "
-            f"PC=${st.pc:04X}, {st.total_cycles} cycles"
-        )
+        print(f"PyAtari: {st.frame} frame(s) executed, PC=${st.pc:04X}, {st.total_cycles} cycles")
     else:
         from pyatari.frontend import run
 

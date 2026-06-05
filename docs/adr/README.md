@@ -39,3 +39,4 @@ record rather than a template exercise.
 - [0007-cpu-packed-status-byte-dispatch-table-stack-bypass](./0007-cpu-packed-status-byte-dispatch-table-stack-bypass.md)
 - [0008-numpy-framebuffer-memory-handler-list-clock-inline](./0008-numpy-framebuffer-memory-handler-list-clock-inline.md)
 - [0009-text-scanline-cache-and-pixel-table](./0009-text-scanline-cache-and-pixel-table.md)
+- [0010-inverse-text-cursor-and-scanline-render-gating](./0010-inverse-text-cursor-and-scanline-render-gating.md)
