@@ -144,6 +144,30 @@ def test_render_scanline_inverse_space_cursor_is_solid_when_chactl_inverse_enabl
     assert all(gtia.framebuffer[0][x] == gtia.color_to_rgb(0x9A) for x in range(8))
 
 
+def test_render_scanline_mode_7_double_height_uses_line_relative_scanline() -> None:
+    memory = MemoryBus()
+    gtia = GTIA(memory=memory)
+    gtia.write_register(int(GTIAWriteRegister.COLPF2), 0x2E)
+    gtia.write_register(int(GTIAWriteRegister.COLPF0), 0x00)
+    memory.write_byte(0x3100, 0x41)
+    memory.write_byte(0x1608, 0b10000000)
+    memory.write_byte(0x1609, 0b01000000)
+
+    line = DisplayListLine(
+        instruction_address=0x2000, instruction=0x47, mode=7, scanlines=16, screen_address=0x3100
+    )
+    gtia.render_scanline(line, row=24, antic_chbase=0x14, antic_line_scanline=0)
+    gtia.render_scanline(line, row=25, antic_chbase=0x14, antic_line_scanline=1)
+    gtia.render_scanline(line, row=26, antic_chbase=0x14, antic_line_scanline=2)
+
+    fg = gtia.color_to_rgb(0x2E)
+    bg = gtia.color_to_rgb(0x00)
+    assert gtia.framebuffer[24][0] == fg
+    assert gtia.framebuffer[25][0] == fg
+    assert gtia.framebuffer[26][0] == bg
+    assert gtia.framebuffer[26][2] == fg
+
+
 def test_render_scanline_mode_6_double_width_and_chbase_switching() -> None:
     memory = MemoryBus()
     gtia = GTIA(memory=memory)

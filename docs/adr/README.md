@@ -40,3 +40,4 @@ record rather than a template exercise.
 - [0008-numpy-framebuffer-memory-handler-list-clock-inline](./0008-numpy-framebuffer-memory-handler-list-clock-inline.md)
 - [0009-text-scanline-cache-and-pixel-table](./0009-text-scanline-cache-and-pixel-table.md)
 - [0010-inverse-text-cursor-and-scanline-render-gating](./0010-inverse-text-cursor-and-scanline-render-gating.md)
+- [0011-line-relative-text-scanline-rendering](./0011-line-relative-text-scanline-rendering.md)

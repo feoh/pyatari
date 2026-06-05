@@ -477,13 +477,18 @@ class Machine:
                 size_mask=wr[0xD00C],
                 color=wr[0xD012],
             )
+            current_line = self.antic.current_line
+            line_scanline = None
+            if current_line is not None:
+                line_scanline = current_line.scanlines - self.antic.current_line_remaining - 1
             self.gtia.render_scanline(
-                self.antic.current_line,
+                current_line,
                 row=row,
                 antic_chbase=self.antic.chbase,
                 antic_chactl=self.antic.chactl,
                 antic_hscrol=self.antic.hscrol,
                 antic_vscrol=self.antic.vscrol,
+                antic_line_scanline=line_scanline,
             )
 
     def _samples_per_frame(self) -> int:

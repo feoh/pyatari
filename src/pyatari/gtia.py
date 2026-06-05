@@ -177,6 +177,7 @@ class GTIA:
         antic_chactl: int = 0,
         antic_hscrol: int = 0,
         antic_vscrol: int = 0,
+        antic_line_scanline: int | None = None,
     ) -> None:
         if not (0 <= row < DISPLAY_HEIGHT):
             return
@@ -189,20 +190,21 @@ class GTIA:
             self._fill_row(row, self.write_registers[int(GTIAWriteRegister.COLBK)])
             return
 
+        line_scanline = row if antic_line_scanline is None else antic_line_scanline
+        vertical_offset = self._vertical_scroll_offset(line, antic_vscrol)
         if mode_info.is_text:
             self._render_text_mode(
                 line,
                 row=row,
+                line_scanline=line_scanline,
                 antic_chbase=antic_chbase,
                 antic_chactl=antic_chactl,
                 columns=mode_info.bytes_per_line,
                 cell_width=8 if line.mode in {2, 3, 4, 5} else 16,
-                vertical_offset=self._vertical_scroll_offset(line, antic_vscrol),
+                vertical_offset=vertical_offset,
             )
         else:
-            self._render_bitmap_mode(
-                line, row=row, vertical_offset=self._vertical_scroll_offset(line, antic_vscrol)
-            )
+            self._render_bitmap_mode(line, row=row, vertical_offset=vertical_offset)
 
         if line.hscroll:
             self._apply_horizontal_scroll(row, self._horizontal_scroll_offset(line, antic_hscrol))
@@ -214,6 +216,7 @@ class GTIA:
         line: DisplayListLine,
         *,
         row: int,
+        line_scanline: int,
         antic_chbase: int,
         antic_chactl: int,
         columns: int,
@@ -231,7 +234,9 @@ class GTIA:
         subpixel_count = cell_width // 8
         chbase_page = (antic_chbase & 0xFF) << 8
 
-        glyph_row = (row + vertical_offset) % ANTIC_MODES[mode].scanlines_per_row
+        glyph_row = (line_scanline + vertical_offset) % ANTIC_MODES[mode].scanlines_per_row
+        if mode in {5, 7}:
+            glyph_row //= 2
         if antic_chactl & _CHACTL_REFLECT:
             glyph_row = 7 - (glyph_row % 8)
         else:
